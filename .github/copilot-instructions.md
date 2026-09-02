@@ -5,9 +5,15 @@
 ```powershell
 .\gradlew.bat :app:assembleDebug          # build debug APK
 .\gradlew.bat :app:installDebug           # build + install on connected device/emulator
+.\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
 ```
 
-No dedicated test suite is configured. Use Gradle lint for static checks.
+Focused JVM tests cover the concurrency/deadline helper. No instrumentation suite is configured;
+use Gradle lint for Android static checks.
+
+The build uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
+`targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00
+(Material 3 follows the BOM), and Navigation 2.10.
 
 ## Architecture
 
@@ -38,24 +44,28 @@ cannot re-trigger the pipeline, so the guard is scoped to the SMS channel's dest
 
 **Channel pattern.** Each channel is a `XxxConfig` immutable data class (`enabled` flag + fields +
 `hasCredentials`/`isOperational` + `load(prefs)` + `KEY_*` consts) paired with a `XxxChannel`
-`object` exposing `send(context, config, body, onComplete: (Boolean) -> Unit = {})`. Channels log
+`object` exposing `send(context, config, body, onComplete: (Boolean) -> Unit = {}): Boolean`. Channels log
 `SEND OK [Channel]` / `SEND FAILED [Channel]` and never log secrets. **Channels never record
 stats** — `SmsReceiver` owns the single increment per matched SMS.
 
-**WhatsApp Cloud channel** (`util/WhatsAppCloudChannel.kt`): `object` with a single-thread daemon
-`Executor` named `wa-sender`. The message template is **fixed in code** (constants `TEMPLATE_NAME`,
-`TEMPLATE_LANGUAGE`, `TEMPLATE_TITLE`) — it is intentionally not selectable in the config
+**WhatsApp Cloud channel** (`util/WhatsAppCloudChannel.kt`): `object` with a cached daemon
+`Executor` named `wa-sender`; overlapping sends run concurrently rather than queueing or failing busy.
+The message template is **fixed in code** (constants `TEMPLATE_NAME`,
+`TEMPLATE_LANGUAGE`, `TEMPLATE_USER`) — it is intentionally not selectable in the config
 or the UI. It points at the approved `titled_forwarded_sms` template, whose body has two `{{n}}`
 parameters: `{{1}}` is bound to the fixed user `TEMPLATE_USER` (`"Miguel"`) and `{{2}}` to the
 forwarded SMS body. `send`
 builds the template JSON via `buildPayload`, strips the leading `+` from the recipient, opens
 `HttpURLConnection` to
 `https://graph.facebook.com/v21.0/{phoneNumberId}/messages`, writes the body with
-`setFixedLengthStreamingMode`, sets `Authorization: Bearer …`, 10 s connect / 20 s read timeout,
+`setFixedLengthStreamingMode`, sets bearer authorization, and applies 8 s connect/read safeguards.
+The receiver-facing completion callback has an 8.5 s overall deadline; if that expires, delivery
+is logged as unknown while the transport finishes unwinding.
 then logs `SEND OK [WhatsApp] → {recipient} (HTTP {code})` or the matching `SEND FAILED` with the
 Meta `error.{code,type,message}` summary. The access token never appears in logs.
 
-**Telegram channel** (`util/TelegramChannel.kt`): sibling `object` on a `tg-sender` daemon thread.
+**Telegram channel** (`util/TelegramChannel.kt`): sibling `object` on a cached `tg-sender`
+daemon executor with the same timeout behavior.
 POSTs `chat_id`+`text` (web previews disabled) to `https://api.telegram.org/bot{token}/sendMessage`
 (token URL-encoded), logs `SEND OK/FAILED [Telegram]` with the Telegram `error_code`+`description`
 summary. The bot token never appears in logs.
@@ -96,7 +106,8 @@ AES/GCM using a key held by Android Keystore, then stores the ciphertext in the 
 `StateFlow`s and are persisted only when the user taps the screen's explicit **Save** button (no
 debounced auto-save). On the Filters screen the allowed senders and message-format rules are each
 rendered as a list of editable `OutlinedTextField` rows with a per-row delete button (order is not
-significant); blank rows are dropped on save and ignored by the live pipeline.
+significant); blank rows are dropped on save and ignored by the live pipeline. Channel **Send test**
+actions use the currently displayed draft values without saving them.
 
 ## Conventions
 
@@ -127,8 +138,42 @@ significant); blank rows are dropped on save and ignored by the live pipeline.
 - **`FiltersViewModel.runTest` is a dry-run mirror of the live pipeline.** The Filters screen has
   an inline "Test a message" card (sample sender + message) that subjects the input to the
   **currently displayed (possibly unsaved) draft** filters — draft senders, draft rules (match any,
-  invalid patterns skipped), draft template — and the same channels `SmsReceiver` does (all three,
-  via each config's `isOperational`). The last-used sender/message are persisted (`lastTestSender`,
+  invalid patterns skipped), draft template — plus the live SMS destination loop guard and the
+  same channels `SmsReceiver` does (all three, via each config's `isOperational`). The last-used sender/message are persisted (`lastTestSender`,
   `lastTestMessage`); the sender otherwise defaults to the first phone-like entry in the senders
   list. If you add or change a channel or the matching logic, update `runTest` so the two cannot
   drift.
+
+## Emulator test protocol
+
+Real, temporary WhatsApp and Telegram credentials may be used for emulator functional testing
+when the user has placed them in
+`C:\Projects\MCSMSForwarderMultiChannelTemp\shortlived.json`. The expected JSON keys are
+`waPhoneNumberId`, `waAccessToken`, `waRecipient`, `tgBotToken`, and `tgChatId`.
+
+- The credential file is user-managed, read-only session material. Automation must never modify or
+  delete it; the user deletes it at the end of the development session. It may be reused by
+  multiple sequential tests.
+- Before reading it, verify its resolved path is outside every Git checkout/worktree and outside
+  Copilot session/artifact storage. Never call a viewing tool on it, print it, place it in chat,
+  copy it into the repository, or expose values in command text/output.
+- Load the JSON only inside a local PowerShell process with output suppressed. Use ADB to focus and
+  populate the real Compose fields, then tap **Save**, so tokens follow the production
+  `SecureStore`/Android Keystore path. Do not add debug importers, BuildConfig secrets, resources,
+  environment-variable credentials, clipboard staging, or repository-local secret files.
+- Run only the real sends needed for the requested verification. For incoming emulator SMS, use
+  the telephony path (`adb emu sms send`), not a spoofed `SMS_RECEIVED` broadcast.
+- Raw screenshots and UI hierarchy dumps from real-credential runs must be written only to a
+  temporary directory outside the repository. Strongly pixelate sensitive regions before copying
+  an image into `docs/screenshots`: tokens/masks, phone-number IDs, recipients, chat IDs, sender
+  identifiers, message bodies, OTPs, and destinations. Preserve channel names, success/failure
+  labels, HTTP codes, and timestamps.
+- Strip screenshot metadata and validate only the redacted derivative. Exact-value/OCR checks must
+  output pass/fail only. Copy only the redacted image into the repository, then delete its raw
+  screenshot and UI hierarchy; do not delete the credential file.
+- Before any commit or push, scan the working tree and Git index in memory for each exact
+  credential value plus common secret patterns. Never print a matched value. If contamination is
+  detected, stop and report only the affected path until it is removed and the credential rotated
+  if necessary.
+- At test cleanup, remove transient captures and clear emulator app data when appropriate. The
+  external credential file remains untouched until the user removes it.

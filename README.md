@@ -14,17 +14,17 @@ Each channel is independently toggleable; enable one, two, or all three at once.
 
 | Status / readiness | Channels | Activity log |
 | --- | --- | --- |
-| ![Status tab: a forwarding master switch, an "All systems go" readiness card, and a lifetime forwarding-stats card](docs/screenshots/status.png) | ![Channels tab: WhatsApp, Telegram, and SMS cards each with their own icon, a status line, and an enable switch](docs/screenshots/channels.png) | ![Activity tab: colour-coded REAL SEND / SEND OK entries with filter chips and Share / Clear actions](docs/screenshots/activity-log.png) |
+| ![Status tab: a forwarding master switch, an "All systems go" readiness card, and a lifetime forwarding-stats card](docs/screenshots/status.png) | ![Channels tab: WhatsApp, Telegram, and SMS cards each with their own icon, a status line, and an enable switch](docs/screenshots/channels.png) | ![Activity tab: send attempts and outcomes with filter chips and Share / Clear actions](docs/screenshots/activity-log.png) |
 
 The UI is a single-activity Jetpack Compose app with a Material 3 bottom-navigation bar:
 
 - **Status** — a master forwarding switch plus a **readiness checklist** that surfaces only the blocking setup items (permissions, battery exemption, missing credentials) as actionable fix chips, and a lifetime forwarding-stats card.
 - **Channels** — WhatsApp, Telegram, and SMS as cards (status + enable switch); tap one to open its detail form, or open **Senders, rules & template** for the shared filters.
-- **Activity** — the colour-coded log (green successes, red failures) with filter chips.
+- **Activity** — the log uses neutral send attempts, green successes, and red failures, with filter chips.
 
 | Channel detail (WhatsApp) | Filters |
 | --- | --- |
-| ![WhatsApp detail form: enable switch, WhatsApp Phone Number ID, write-only Access token, recipient with a country-code hint, Send test / Save](docs/screenshots/channel-whatsapp.png) | ![Filters screen: allowed senders and regex rules as editable rows each with a delete button, a forwarding template, and an inline test card](docs/screenshots/filters.png) |
+| ![WhatsApp detail form: enable switch, WhatsApp Phone Number ID, write-only Access token, recipient with a country-code hint, Send test / Save](docs/screenshots/channel-whatsapp.png) | ![Filters screen: allowed senders and regex rules as editable rows, each with a delete button and an add-row action](docs/screenshots/filters.png) |
 
 ## What it does
 
@@ -44,7 +44,7 @@ The reception, filtering, normalization, multipart handling, and template logic 
 
 ## What is NOT included
 
-- No retry / backoff queue. The HTTP channels report 2xx/non-2xx synchronously; the SMS channel reports the modem result asynchronously in the log. Neither retries.
+- No retry / backoff queue. HTTP sends start concurrently so one slow request does not queue or reject another. Each uses an 8.5-second receiver-facing completion deadline; the underlying connection has 8-second connect/read safeguards and may finish later, in which case delivery is reported as unknown. The SMS channel reports the modem result asynchronously in the log. None of the channels retries.
 - No webhook server for delivery receipts.
 - No media (image/audio/document) forwarding — text only.
 - **Loop guard is SMS-only.** A message arriving from the SMS forward destination is suppressed so an SMS→SMS echo cannot bounce indefinitely. WhatsApp and Telegram run on a different transport and cannot re-trigger the pipeline, so they need no guard.
@@ -54,40 +54,50 @@ The reception, filtering, normalization, multipart handling, and template logic 
 ```powershell
 .\gradlew.bat :app:assembleDebug          # build debug APK
 .\gradlew.bat :app:installDebug           # build + install on connected device/emulator
+.\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
 ```
 
-`minSdk` 33, `targetSdk` 36, Kotlin 2.0, AGP 8.13, Jetpack Compose + Material 3.
+`compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), and Navigation 2.10.0.
 
 Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`). No keystore is committed.
 
 ## One-time Meta setup (WhatsApp)
 
-The quickest and cheapest path is to use the **test phone number** that Meta provisions for you for free. No credit card, no Business Verification, no template approval cycle. Recipient list is capped at 5 numbers — enough for personal forwarding.
+The quickest development path is to use the **test phone number** Meta exposes in the App Dashboard. Test numbers and dashboard-managed test recipients are intended for development, not production-scale messaging. The custom `titled_forwarded_sms` template used by this app must still be approved for the connected WhatsApp Business Account.
 
-### Click-path: free test number with a never-expiring token
+### Click-path: developer test number with a system-user token
 
 1. Sign in at <https://developers.facebook.com/> and create a **Business** app. From the app dashboard, add the **WhatsApp** product.
 2. *WhatsApp → API Setup*: Meta auto-provisions a **WhatsApp Business Account (WABA)** and a **test phone number**. Copy the **Phone number ID** (numeric, under the test number).
-3. Still in *API Setup*, under **To**, click **Manage phone number list** and add **your** WhatsApp number as a recipient. Meta will send you a 6-digit verification code on WhatsApp — enter it. You can add up to 5 recipients total.
+3. Still in *API Setup*, under **To**, use **Manage phone number list** to add your WhatsApp number as a test recipient, then complete the verification flow Meta presents.
 4. (Optional but recommended) **Send a test message** from the *API Setup* page using the default `hello_world` template, just to confirm the WABA is healthy before generating the long-lived token.
-5. Create the long-lived token:
+5. Create the system-user token:
    1. Open **Meta Business Suite** → the gear icon (Business settings) for the business that owns the WABA.
    2. *Users → System users → Add* — give it a name (e.g. `sms-forwarder`) and role **Admin**.
    3. With the new system user selected, click **Add assets** → **Apps** → pick your app → toggle **Full control**. Repeat **Add assets** → **WhatsApp accounts** → pick your WABA → toggle **Full control**.
-   4. Click **Generate new token** → pick your app → **Token expiration: Never** → select scopes `whatsapp_business_messaging` and `whatsapp_business_management` → **Generate token** → copy it once (you cannot view it again).
+   4. Click **Generate new token** → pick your app → choose the longest suitable expiration offered → select `business_management`, `whatsapp_business_messaging`, and `whatsapp_business_management` → **Generate token** → copy it once.
 6. In this app, open the **Channels** tab and tap **WhatsApp**: paste **WhatsApp Phone Number ID**, **Access token**, and **WhatsApp Recipient Phone Number** (full number with country code, no `+`, e.g. `351912345678`). The message template is fixed in code — it points at the approved `titled_forwarded_sms` template, whose body has two parameters (a fixed user name and the forwarded SMS body), so **Send test** delivers the templated message with your content.
 
 The **Access token** field is write-only: once saved it pre-fills with a bullet mask standing in for the stored token (never the token itself) — leave the mask untouched to keep it, type over it to replace it, or clear the field to delete it.
 
 Notes:
-- The test number itself is permanent for the life of the WABA — do **not** delete it from *API Setup*.
-- Recipient numbers must be **opted-in** (the 6-digit confirmation flow above does that). Adding new ones requires the same confirmation.
-- Free tier limit is intentionally 5 destinations and 250 conversations/day — plenty for personal SMS forwarding.
+- Test numbers and their permitted recipients are controlled by the App Dashboard; use a registered business number for production.
+- Recipient numbers must be opted in. For dashboard test recipients, complete the verification flow Meta presents.
 - Outside the 24-hour customer service window, only **approved templates** are allowed. The `titled_forwarded_sms` template must be approved on your WABA before sends will succeed.
+
+### Current Meta messaging limits and pricing
+
+As of September 2026:
+
+- Messaging limits are set on the **business portfolio** and shared by all its business phone numbers. They count unique WhatsApp users reached outside a customer service window in a rolling 24-hour period.
+- A new portfolio starts at **250 unique users** and can scale to 2,000, 10,000, 100,000, then unlimited after meeting Meta's verification, quality, and usage criteria. This is a messaging-capacity limit, not a free-message allowance.
+- Meta prices Cloud API usage per delivered template message. Non-template messages inside an open 24-hour customer service window are free, and utility templates inside that window are free; other delivered templates are charged according to category and recipient country.
+- This app always sends the approved `titled_forwarded_sms` template, so its assigned category determines whether a particular delivery is charged.
+- The app currently calls Graph API v21.0. Meta's current examples use newer versions, so this version should be reviewed before its support window ends.
 
 ### Production phone number (optional)
 
-If you need to send from your real number instead of the test number, you'll have to **migrate or onboard a real phone number** (involves Business Verification, two-step PIN, possibly Embedded Signup). That's out of scope for this test variant.
+For production, register or migrate a business phone number and complete the onboarding, verification, billing, and two-step-verification steps shown by WhatsApp Manager. Those requirements vary with the account and desired messaging scale.
 
 ## One-time Telegram setup
 
@@ -139,7 +149,7 @@ Filters are shared by every channel and live on the **Channels** tab under **Sen
 - **WhatsApp Phone Number ID** — numeric, from Meta.
 - **Access token** — Bearer token; stored encrypted at rest and write-only in the UI (see warning above).
 - **WhatsApp Recipient Phone Number** — destination number with country code and no `+` (e.g. `351912345678`).
-- **Send test** button — POSTs a synthetic message to your recipient using your current WhatsApp settings.
+- **Send test** button — POSTs a synthetic message using the settings currently displayed without saving them.
 
 The message template is **fixed in code** (`WhatsAppCloudChannel`), not chosen in the UI. It uses the approved `titled_forwarded_sms` template, whose body has two parameters: a fixed user name (`{{1}}`) and the forwarded SMS body (`{{2}}`).
 
@@ -148,15 +158,15 @@ The message template is **fixed in code** (`WhatsAppCloudChannel`), not chosen i
 - **Enabled** — master toggle for the channel (off by default).
 - **Bot token** — from @BotFather; stored encrypted at rest and write-only in the UI.
 - **Chat ID** — numeric (positive for DMs, negative for groups).
-- **Send test** button — POSTs a synthetic message to the chat ID using your current Telegram settings.
+- **Send test** button — POSTs a synthetic message using the currently displayed token and chat ID without saving them.
 
 **SMS** (Channels tab → SMS)
 
 - **Enabled** — master toggle for the channel (off by default).
 - **Destination number** — where matched messages are re-sent, in E.164 form (`+35191XXXXXXX`).
-- **Send test** button — re-sends a synthetic message from this device's SIM to the destination.
+- **Send test** button — re-sends a synthetic message from this device's SIM to the currently displayed destination without saving it.
 
-A SMS is forwarded to **every channel whose toggle is on and whose credentials are complete**. Each successful or failed delivery is logged separately. The activity stats counter increments **once per matched SMS**, regardless of how many channels accepted it.
+An SMS is attempted on **every channel whose toggle is on and whose credentials are complete**. Each outcome is logged separately. The activity stats counter increments once when at least one channel accepts the message, regardless of how many channels succeed.
 
 ## Architecture
 
@@ -164,10 +174,10 @@ Single-module Android app (`:app`), Kotlin. The UI is a single-activity Jetpack 
 
 **Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`mc_sms_fwd_wa`/`master_enabled`, default ON) → bail if no channel is operational (enabled toggle on AND credentials present) → reassemble multipart → SMS loop guard (suppress messages from the SMS forward destination) → match sender via `SenderMatcher` → normalize body via `TextNormalizer.normalizeForMatching` → compile each regex once and match any → apply optional `ForwardTemplate` → `BroadcastReceiver.goAsync()` → fan out the same body to **every operational channel** in parallel. A shared `AtomicInteger` counts pending channel callbacks; once they all complete, the receiver records exactly one stat (if any channel succeeded) and calls `pending.finish()`.
 
-`WhatsAppCloudChannel`, `TelegramChannel`, and `SmsChannel` are sibling singletons. The two HTTP channels share `HttpJsonClient` (a thin `HttpURLConnection` wrapper) and each run on their own single-thread daemon executor (`wa-sender`, `tg-sender`, both built via `singleThreadDaemonExecutor`), 10 s connect / 20 s read, and report `SEND OK`/`SEND FAILED` with the HTTP status and provider-specific error summary (Meta `error.{code,type,message}` for WhatsApp, Telegram `error_code` + `description` for Telegram). Neither ever logs its bearer/bot token. `SmsChannel` dispatches through `SmsManager.sendMultipartTextMessage` and registers a private result receiver that logs the modem's per-segment outcome. Stats are owned solely by `SmsReceiver` — the channels only log.
+`WhatsAppCloudChannel`, `TelegramChannel`, and `SmsChannel` are sibling singletons. The two HTTP channels share `HttpJsonClient` (a thin `HttpURLConnection` wrapper) and start each request immediately on cached daemon executors (`wa-sender` / `tg-sender`), so overlapping sends run concurrently rather than waiting or being rejected. Each has an 8.5-second completion deadline plus 8-second connect/read safeguards. A request still unwinding after the completion deadline is logged as having unknown delivery and no longer holds the SMS broadcast open. Each channel reports `SEND OK`/`SEND FAILED` with the HTTP status and provider-specific error summary (Meta `error.{code,type,message}` for WhatsApp, Telegram `error_code` + `description` for Telegram). Neither ever logs its bearer/bot token. `SmsChannel` dispatches through `SmsManager.sendMultipartTextMessage` and registers a private result receiver that logs the modem's per-segment outcome. Stats are owned solely by `SmsReceiver` — the channels only log.
 
 Secrets (the WhatsApp access token and Telegram bot token) are encrypted by the `SecureStore` singleton with AES/GCM using a key held by Android Keystore, then stored in the private `mc_sms_fwd_secure` preferences file. `WhatsAppConfig.load` / `TelegramConfig.load` take a `Context` so they can read those tokens; everything else (toggles, phone numbers, chat IDs, lists, logs, stats) stays in the plaintext `mc_sms_fwd_wa` prefs.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Released under the Unlicense (public-domain dedication) — see [LICENSE](LICENSE).

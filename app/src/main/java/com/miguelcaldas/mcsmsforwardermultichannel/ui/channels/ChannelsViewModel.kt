@@ -167,39 +167,44 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     }
 
     /** Fires a manual WhatsApp test send. Returns the message to show the user. */
-    fun sendWhatsAppTest(): String {
+    fun sendWhatsAppTest(phoneNumberId: String, recipient: String, accessToken: String): String {
         val context = getApplication<Application>()
-        val config = WhatsAppConfig.load(context)
+        val config = WhatsAppConfig(
+            enabled = true,
+            phoneNumberId = phoneNumberId.trim(),
+            accessToken = accessToken.trim(),
+            recipient = recipient.trim(),
+        )
         if (!config.hasCredentials) {
             return "Set Phone Number ID, access token, and recipient first."
         }
         val body = "MC SMS\u2192WhatsApp Test \u2014 manual test send at ${System.currentTimeMillis()}"
         LogUtils.addToLog(context, "REAL SEND [WhatsApp] \u2192 To: ${config.recipient} | Msg: $body (manual test)")
-        WhatsAppCloudChannel.send(context, config, body)
-        return "Sending test message\u2026 see Activity log."
+        val started = WhatsAppCloudChannel.send(context, config, body)
+        return if (started) "Sending test message\u2026 see Activity log." else "Could not start test send; see Activity log."
     }
 
-    fun sendTelegramTest(): String {
+    fun sendTelegramTest(chatId: String, botToken: String): String {
         val context = getApplication<Application>()
-        val config = TelegramConfig.load(context)
+        val config = TelegramConfig(enabled = true, botToken = botToken.trim(), chatId = chatId.trim())
         if (!config.hasCredentials) {
             return "Set bot token and chat ID first."
         }
         val body = "MC SMS\u2192Telegram Test \u2014 manual test send at ${System.currentTimeMillis()}"
         LogUtils.addToLog(context, "REAL SEND [Telegram] \u2192 To: chat ${config.chatId} | Msg: $body (manual test)")
-        TelegramChannel.send(context, config, body)
-        return "Sending Telegram test\u2026 see Activity log."
+        val started = TelegramChannel.send(context, config, body)
+        return if (started) "Sending Telegram test\u2026 see Activity log." else "Could not start Telegram test; see Activity log."
     }
 
-    fun sendSmsTest(): String {
+    fun sendSmsTest(destination: String): String {
         val context = getApplication<Application>()
-        val config = SmsConfig.load(prefs)
+        val config = SmsConfig(enabled = true, destination = destination.trim())
         if (!config.hasCredentials) {
             return "Set the SMS destination number first."
         }
         val body = "MC SMS\u2192SMS Test \u2014 manual test send at ${System.currentTimeMillis()}"
         LogUtils.addToLog(context, "REAL SEND [SMS] \u2192 To: ${config.destination} | Msg: $body (manual test)")
-        SmsChannel.send(context, config, body)
-        return "Sending SMS test\u2026 see Activity log."
+        val dispatched = SmsChannel.send(context, config, body)
+        return if (dispatched) "SMS test handed to the modem\u2026 see Activity log." else "SMS test dispatch failed; see Activity log."
     }
 }

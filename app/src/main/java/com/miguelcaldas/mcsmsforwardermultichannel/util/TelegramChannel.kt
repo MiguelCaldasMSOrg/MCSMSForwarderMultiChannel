@@ -3,10 +3,11 @@ package com.miguelcaldas.mcsmsforwardermultichannel.util
 import android.content.Context
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.util.concurrent.TimeoutException
 
 /**
- * Posts forwarded SMS bodies to the Telegram Bot API on a single background
- * thread so SmsReceiver can finish its onReceive promptly.
+ * Posts forwarded SMS bodies to the Telegram Bot API on cached background
+ * workers so overlapping messages do not block each other.
  *
  * Success is signalled to the caller via `onComplete(true|false)` so the
  * receiver can decide whether to record a forward stat. The bot token is
@@ -16,22 +17,25 @@ import java.net.URLEncoder
  */
 object TelegramChannel {
     private const val API_BASE = "https://api.telegram.org"
-    private const val CONNECT_TIMEOUT_MS = 10_000
-    private const val READ_TIMEOUT_MS = 20_000
+    private const val CONNECT_TIMEOUT_MS = 8_000
+    private const val READ_TIMEOUT_MS = 8_000
+    private const val COMPLETION_TIMEOUT_MS = 8_500L
 
-    private val sendExecutor = singleThreadDaemonExecutor("tg-sender")
+    private val sendExecutor = cachedDaemonExecutor("tg-sender")
 
-    fun send(context: Context, config: TelegramConfig, body: String, onComplete: (Boolean) -> Unit = {}) {
+    fun send(context: Context, config: TelegramConfig, body: String, onComplete: (Boolean) -> Unit = {}): Boolean {
         val app = context.applicationContext
         if (!config.hasCredentials) {
             LogUtils.addToLog(app, "SEND FAILED [Telegram] → missing config")
             onComplete(false)
-            return
+            return false
         }
-        sendExecutor.execute {
+        return sendExecutor.executeWithDeadline(
+            timeoutMs = COMPLETION_TIMEOUT_MS,
+            block = { postSync(config, body) },
+        ) { outcome ->
             var success = false
             try {
-                val outcome = runCatching { postSync(config, body) }
                 val result = outcome.getOrNull()
                 when {
                     result != null && result.success -> {
@@ -41,6 +45,9 @@ object TelegramChannel {
                     result != null -> {
                         val detail = result.errorSummary?.takeIf { it.isNotBlank() }?.let { " ${redactSecret(it, config.botToken)}" }.orEmpty()
                         LogUtils.addToLog(app, "SEND FAILED [Telegram] → chat ${config.chatId} (HTTP ${result.statusCode})$detail")
+                    }
+                    outcome.exceptionOrNull() is TimeoutException -> {
+                        LogUtils.addToLog(app, "SEND FAILED [Telegram] → chat ${config.chatId} (completion timeout; delivery unknown)")
                     }
                     else -> {
                         // The bot token lives in the request URL, and HttpURLConnection exceptions

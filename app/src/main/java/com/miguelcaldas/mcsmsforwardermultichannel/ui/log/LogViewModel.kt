@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 enum class LogFilter { All, SendOk, SendFailed, Boot }
+enum class LogClearState { Idle, Clearing, Failed }
 
 /**
  * Holds the activity-log screen state. Reads entries through [LogUtils] (backed by
@@ -28,9 +29,12 @@ class LogViewModel(application: Application) : AndroidViewModel(application) {
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
+    private val _clearState = MutableStateFlow(LogClearState.Idle)
+    val clearState: StateFlow<LogClearState> = _clearState.asStateFlow()
+
     // Refresh the list live when a new entry is written elsewhere (SmsReceiver, channels, …).
     private val changeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == null || key == LOGS_KEY) {
+        if (_clearState.value != LogClearState.Clearing && (key == null || key == LOGS_KEY)) {
             refresh()
         }
     }
@@ -46,8 +50,23 @@ class LogViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clear() {
-        LogUtils.clearLogs(getApplication())
-        refresh()
+        if (_clearState.value == LogClearState.Clearing) {
+            return
+        }
+        _clearState.value = LogClearState.Clearing
+        LogUtils.clearLogs(getApplication()) { cleared ->
+            if (cleared) {
+                _logs.value = emptyList()
+            }
+            _clearState.value = if (cleared) LogClearState.Idle else LogClearState.Failed
+            refresh()
+        }
+    }
+
+    fun clearFailureShown() {
+        if (_clearState.value == LogClearState.Failed) {
+            _clearState.value = LogClearState.Idle
+        }
     }
 
     /** Current filtered entries, most recent first. Used by the share action. */
@@ -61,7 +80,7 @@ class LogViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun matchesFilter(entry: String, filter: LogFilter): Boolean = when (filter) {
         LogFilter.All -> true
-        LogFilter.SendOk -> entry.contains("SEND OK") || entry.contains("REAL SEND")
+        LogFilter.SendOk -> entry.contains("SEND OK")
         LogFilter.SendFailed -> entry.contains("FAILED")
         LogFilter.Boot -> entry.contains("BOOT \u2192") || entry.contains("TILE \u2192")
     }

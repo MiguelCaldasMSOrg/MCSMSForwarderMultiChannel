@@ -35,12 +35,12 @@ object SmsChannel {
     @Volatile
     private var registered = false
 
-    fun send(context: Context, config: SmsConfig, body: String, onComplete: (Boolean) -> Unit = {}) {
+    fun send(context: Context, config: SmsConfig, body: String, onComplete: (Boolean) -> Unit = {}): Boolean {
         val app = context.applicationContext
         if (!config.hasCredentials) {
             LogUtils.addToLog(app, "SEND FAILED [SMS] → missing config")
             onComplete(false)
-            return
+            return false
         }
         var dispatched = false
         try {
@@ -56,6 +56,7 @@ object SmsChannel {
         } finally {
             onComplete(dispatched)
         }
+        return dispatched
     }
 
     private fun buildSentIntents(app: Context, partCount: Int, destination: String): ArrayList<PendingIntent> {

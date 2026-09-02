@@ -44,7 +44,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.R
-import com.miguelcaldas.mcsmsforwardermultichannel.util.SecureStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SmsConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppConfig
@@ -118,7 +117,7 @@ private fun WhatsAppForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
     // The field is pre-filled with a bullet mask the same length as the stored token.
     // Leaving the mask untouched keeps the saved token; clearing it deletes the token;
     // typing over it replaces the token. The real secret never enters Compose state.
-    val tokenMask = remember { "\u2022".repeat(SecureStore.read(context, SecureStore.KEY_WA_ACCESS_TOKEN).length) }
+    val tokenMask = remember { "\u2022".repeat(initial.accessToken.length) }
 
     var enabled by rememberSaveable { mutableStateOf(initial.enabled) }
     var phoneNumberId by rememberSaveable { mutableStateOf(initial.phoneNumberId) }
@@ -164,8 +163,8 @@ private fun WhatsAppForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
 
     FormActions(
         onTest = {
-            viewModel.saveWhatsApp(enabled, phoneNumberId, recipient, if (token != tokenMask) token else null)
-            toast(viewModel.sendWhatsAppTest())
+            val testToken = if (token == tokenMask) initial.accessToken else token
+            toast(viewModel.sendWhatsAppTest(phoneNumberId, recipient, testToken))
         },
         onSave = {
             viewModel.saveWhatsApp(enabled, phoneNumberId, recipient, if (token != tokenMask) token else null)
@@ -178,7 +177,7 @@ private fun WhatsAppForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
 private fun TelegramForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toast: (String) -> Unit) {
     val context = LocalContext.current
     val initial = remember { TelegramConfig.load(context) }
-    val tokenMask = remember { "\u2022".repeat(SecureStore.read(context, SecureStore.KEY_TG_BOT_TOKEN).length) }
+    val tokenMask = remember { "\u2022".repeat(initial.botToken.length) }
 
     var enabled by rememberSaveable { mutableStateOf(initial.enabled) }
     var chatId by rememberSaveable { mutableStateOf(initial.chatId) }
@@ -210,8 +209,8 @@ private fun TelegramForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
 
     FormActions(
         onTest = {
-            viewModel.saveTelegram(enabled, chatId, if (token != tokenMask) token else null)
-            toast(viewModel.sendTelegramTest())
+            val testToken = if (token == tokenMask) initial.botToken else token
+            toast(viewModel.sendTelegramTest(chatId, testToken))
         },
         onSave = {
             viewModel.saveTelegram(enabled, chatId, if (token != tokenMask) token else null)
@@ -252,8 +251,7 @@ private fun SmsForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toast: (S
 
     FormActions(
         onTest = {
-            viewModel.saveSms(enabled, destination)
-            toast(viewModel.sendSmsTest())
+            toast(viewModel.sendSmsTest(destination))
         },
         onSave = {
             val warning = viewModel.saveSms(enabled, destination)

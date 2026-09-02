@@ -142,7 +142,6 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
-        super.onCleared()
     }
 
     private companion object {

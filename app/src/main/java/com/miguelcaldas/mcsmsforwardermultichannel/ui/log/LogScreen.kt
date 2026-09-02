@@ -22,10 +22,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -52,8 +55,17 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val filter by viewModel.filter.collectAsStateWithLifecycle()
     val logs by viewModel.logs.collectAsStateWithLifecycle()
+    val clearState by viewModel.clearState.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val dark = isSystemInDarkTheme()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(clearState) {
+        if (clearState == LogClearState.Failed) {
+            snackbarHostState.showSnackbar("Could not clear logs")
+            viewModel.clearFailureShown()
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -63,6 +75,7 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
                 scrollBehavior = scrollBehavior,
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(innerPadding).verticalScroll(rememberScrollState()).padding(16.dp),
@@ -116,8 +129,11 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
                     Text("Share")
                 }
                 Spacer(Modifier.width(4.dp))
-                TextButton(onClick = { viewModel.clear() }) {
-                    Text("Clear logs")
+                TextButton(
+                    enabled = clearState != LogClearState.Clearing,
+                    onClick = { viewModel.clear() },
+                ) {
+                    Text(if (clearState == LogClearState.Clearing) "Clearing\u2026" else "Clear logs")
                 }
             }
         }
@@ -133,7 +149,7 @@ private fun buildLogText(logs: List<String>, dark: Boolean): AnnotatedString {
         logs.forEach { entry ->
             val color = when {
                 entry.contains("FAILED") -> failure
-                entry.contains("REAL SEND") || entry.contains("SEND OK") -> success
+                entry.contains("SEND OK") -> success
                 else -> Color.Unspecified
             }
             if (color == Color.Unspecified) {

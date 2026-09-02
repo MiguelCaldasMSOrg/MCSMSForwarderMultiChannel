@@ -3,20 +3,22 @@ package com.miguelcaldas.mcsmsforwardermultichannel.util
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.TimeoutException
 
 /**
- * Posts forwarded SMS bodies to the WhatsApp Cloud API ("Graph") on a single
- * background thread so SmsReceiver can finish its onReceive promptly.
+ * Posts forwarded SMS bodies to the WhatsApp Cloud API ("Graph") on cached
+ * background workers so overlapping messages do not block each other.
  *
- * Stats are incremented only when the API returns 2xx. The access token never
- * appears in log entries — only the HTTP status code and (if present) Meta's
- * `error.code` / `error.message` summary, with any echoed copy of the token
- * redacted before logging.
+ * A 2xx response is reported to SmsReceiver as success; the receiver owns stats.
+ * The access token never appears in log entries — only the HTTP status code and
+ * (if present) Meta's `error.code` / `error.message` summary, with any echoed
+ * copy of the token redacted before logging.
  */
 object WhatsAppCloudChannel {
     private const val GRAPH_BASE = "https://graph.facebook.com/v21.0"
-    private const val CONNECT_TIMEOUT_MS = 10_000
-    private const val READ_TIMEOUT_MS = 20_000
+    private const val CONNECT_TIMEOUT_MS = 8_000
+    private const val READ_TIMEOUT_MS = 8_000
+    private const val COMPLETION_TIMEOUT_MS = 8_500L
 
     // The message template is fixed in code, not chosen in the UI. It points at the
     // approved "titled_forwarded_sms" template, whose body has two {{n}} parameters:
@@ -25,22 +27,23 @@ object WhatsAppCloudChannel {
     private const val TEMPLATE_LANGUAGE = "en"
     private const val TEMPLATE_USER = "Miguel"
 
-    // Single-thread executor: serialises sends so we never open two simultaneous
-    // HTTPS connections for the same incoming SMS, and keeps onReceive return time
-    // short on the main thread.
-    private val sendExecutor = singleThreadDaemonExecutor("wa-sender")
+    // Independent requests run concurrently. The completion deadline releases the
+    // BroadcastReceiver even if a transport call takes longer to unwind.
+    private val sendExecutor = cachedDaemonExecutor("wa-sender")
 
-    fun send(context: Context, config: WhatsAppConfig, body: String, onComplete: (Boolean) -> Unit = {}) {
+    fun send(context: Context, config: WhatsAppConfig, body: String, onComplete: (Boolean) -> Unit = {}): Boolean {
         val app = context.applicationContext
         if (!config.hasCredentials) {
             LogUtils.addToLog(app, "SEND FAILED [WhatsApp] → missing config")
             onComplete(false)
-            return
+            return false
         }
-        sendExecutor.execute {
+        return sendExecutor.executeWithDeadline(
+            timeoutMs = COMPLETION_TIMEOUT_MS,
+            block = { postSync(config, body) },
+        ) { outcome ->
             var success = false
             try {
-                val outcome = runCatching { postSync(config, body) }
                 val result = outcome.getOrNull()
                 when {
                     result != null && result.success -> {
@@ -52,6 +55,9 @@ object WhatsAppCloudChannel {
                         // so redact the access token from the summary before logging.
                         val detail = result.errorSummary?.takeIf { it.isNotBlank() }?.let { " ${redactSecret(it, config.accessToken)}" }.orEmpty()
                         LogUtils.addToLog(app, "SEND FAILED [WhatsApp] → ${config.recipient} (HTTP ${result.statusCode})$detail")
+                    }
+                    outcome.exceptionOrNull() is TimeoutException -> {
+                        LogUtils.addToLog(app, "SEND FAILED [WhatsApp] → ${config.recipient} (completion timeout; delivery unknown)")
                     }
                     else -> {
                         val msg = redactSecret(outcome.exceptionOrNull()?.message.orEmpty(), config.accessToken)

@@ -18,7 +18,7 @@
 </head>
 <body>
     <h1>Privacy Policy</h1>
-    <p class="updated">MC SMS Forwarder (Multi-Channel) &middot; Last updated: 5 June 2026</p>
+    <p class="updated">MC SMS Forwarder (Multi-Channel) &middot; Last updated: 2 September 2026</p>
 
     <p>This Privacy Policy explains how the <strong>MC SMS Forwarder (Multi-Channel)</strong> application (the &ldquo;App&rdquo;) handles information. The App is a personal utility that forwards incoming SMS messages from the device on which it is installed to one or more destinations chosen by the device owner (the WhatsApp Cloud API, Telegram, and/or another phone number via SMS).</p>
 
@@ -27,10 +27,10 @@
 
     <h2>Information the App processes</h2>
     <ul>
-        <li><strong>SMS message content and sender.</strong> When an SMS arrives, the App reads the sender and message body to decide whether it matches the forwarding rules you configured. Matching messages are forwarded, unchanged, to the destinations you enabled.</li>
+        <li><strong>SMS message content and sender.</strong> When an SMS arrives, the App reads the sender and message body to decide whether it matches the forwarding rules you configured. Matching messages are forwarded to the destinations you enabled, after applying your optional forwarding template.</li>
         <li><strong>Configuration you enter.</strong> Allowed senders, matching rules, forwarding templates, and destination identifiers (WhatsApp recipient number, Telegram chat ID, SMS destination number) are stored locally on the device.</li>
         <li><strong>Credentials.</strong> The WhatsApp Cloud API access token and the Telegram bot token are stored encrypted at rest on the device and are used only to authenticate requests to those services. They are never displayed back in the interface and are never written to logs.</li>
-        <li><strong>Local activity log.</strong> The App keeps a short, on-device log of forwarding activity (timestamps and outcomes) for troubleshooting. Logs are pruned automatically and never contain credentials.</li>
+        <li><strong>Local activity log.</strong> The App keeps an on-device troubleshooting log containing timestamps, send outcomes, destination identifiers, and the content of messages selected for forwarding. Loop-guard entries may also contain the sender number. Logs are pruned automatically and never contain channel credentials. You can explicitly share the currently displayed log with another app using the Share action.</li>
     </ul>
 
     <h2>How information is used</h2>
@@ -38,7 +38,7 @@
 
     <h2>Where data is stored and who receives it</h2>
     <ul>
-        <li>All configuration, credentials, and logs remain <strong>on your device</strong>. We do not operate any server that collects or stores your data.</li>
+        <li>Configuration, encrypted credentials, and logs are stored in the App's private data on your device. Depending on your Android backup and device-transfer settings, Android may copy this local app data to a cloud backup or another device. We do not operate any server that collects or stores your data.</li>
         <li>When a message matches your rules, its content is transmitted to the destination services <strong>you</strong> selected:
             <ul>
                 <li><strong>WhatsApp Cloud API</strong> (operated by Meta Platforms, Inc.) — subject to Meta&rsquo;s privacy terms.</li>
@@ -50,7 +50,7 @@
     </ul>
 
     <h2>Data retention</h2>
-    <p>Configuration and credentials persist on the device until you change them or uninstall the App. The on-device activity log is pruned automatically (oldest entries removed after a fixed period or once a size limit is reached). Uninstalling the App removes all locally stored data.</p>
+    <p>Configuration and credentials persist on the device until you change them or uninstall the App. The on-device activity log is pruned automatically after approximately 35 days or once it reaches 2,000 entries. Uninstalling the App removes its data from that device, but a copy may remain in an Android-managed backup and may be restored later according to your Android backup settings.</p>
 
     <h2>Security</h2>
     <p>Credentials are stored using the device&rsquo;s encrypted storage. Network requests to the WhatsApp Cloud API and the Telegram Bot API are made over HTTPS. Because the App runs entirely on your device, the security of that data also depends on the security of your device.</p>

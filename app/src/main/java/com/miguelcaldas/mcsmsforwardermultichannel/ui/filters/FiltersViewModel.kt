@@ -2,6 +2,7 @@ package com.miguelcaldas.mcsmsforwardermultichannel.ui.filters
 
 import android.app.Application
 import android.content.Context
+import android.telephony.PhoneNumberUtils
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
@@ -136,6 +137,8 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         val waConfig = WhatsAppConfig.load(context)
         val tgConfig = TelegramConfig.load(context)
         val smsConfig = SmsConfig.load(prefs)
+        val suppressedByLoopGuard = smsConfig.isOperational &&
+            PhoneNumberUtils.areSamePhoneNumber(sender, smsConfig.destination, iso)
         val operationalChannels = buildList {
             if (waConfig.isOperational) {
                 add("WhatsApp ${waConfig.recipient}")
@@ -149,11 +152,14 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         }
 
         val outgoingBody = if (template.isEmpty()) message else ForwardTemplate.apply(template, sender, System.currentTimeMillis(), message)
-        val wouldSend = senderAllowed && ruleMatches && operationalChannels.isNotEmpty()
+        val wouldSend = !suppressedByLoopGuard && senderAllowed && ruleMatches && operationalChannels.isNotEmpty()
 
         val builder = StringBuilder()
         builder.append("Sender allowed: ").append(if (senderAllowed) "yes" else "no").append(" (against ").append(allowedSenders.size).append(" entries)\n")
         builder.append("Message matches a rule: ").append(if (ruleMatches) "yes" else "no").append(" (against ").append(rules.size).append(" rules)\n")
+        if (smsConfig.isOperational) {
+            builder.append("SMS loop guard: ").append(if (suppressedByLoopGuard) "suppressed" else "clear").append('\n')
+        }
         builder.append("Operational channels: ").append(if (operationalChannels.isEmpty()) "none" else operationalChannels.joinToString(", ")).append('\n')
         builder.append('\n')
         if (wouldSend) {

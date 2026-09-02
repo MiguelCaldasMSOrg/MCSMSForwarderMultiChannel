@@ -1,5 +1,6 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.util
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
@@ -54,10 +55,17 @@ object LogUtils {
         return entries.sortedByDescending { it.timestamp }.map { "${fmt.format(Date(it.timestamp))} → ${it.message}" }
     }
 
-    fun clearLogs(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        prefs.edit {
-            remove(LOGS_KEY)
+    @SuppressLint("UseKtx") // KTX edit(commit = true) discards the commit result needed by the UI.
+    fun clearLogs(context: Context, onCleared: (Boolean) -> Unit = {}) {
+        val appContext = context.applicationContext
+        writeExecutor.execute {
+            val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            var cleared = false
+            try {
+                cleared = prefs.edit().remove(LOGS_KEY).commit()
+            } finally {
+                onCleared(cleared)
+            }
         }
     }
 
