@@ -1,6 +1,11 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-feature android:name="android.hardware.telephony" android:required="true" />
+    <!-- Receiving SMS is the app's core function, so non-telephony devices are unsupported. -->
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="true"
+        tools:ignore="UnnecessaryRequiredFeature" />
 
     <!-- Permissions for receiving SMS -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
