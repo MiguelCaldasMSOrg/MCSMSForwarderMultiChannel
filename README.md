@@ -51,6 +51,23 @@ The reception, filtering, normalization, multipart handling, and template logic 
 
 ## Build & install
 
+Download the latest signed release directly from GitHub or from the [project website](https://miguelcaldasmsorg.github.io/MCSMSForwarderMultiChannel/):
+
+- [MC.SMS.Forwarder.apk](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/releases/latest/download/MC.SMS.Forwarder.apk)
+- [MC.SMS.Forwarder.apk.sha256](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/releases/latest/download/MC.SMS.Forwarder.apk.sha256)
+
+Verify the downloaded APK on Windows:
+
+```powershell
+$expected = (Get-Content .\MC.SMS.Forwarder.apk.sha256).Split()[0]
+$actual = (Get-FileHash .\MC.SMS.Forwarder.apk -Algorithm SHA256).Hash
+$actual.Equals($expected, [StringComparison]::OrdinalIgnoreCase)
+```
+
+The command must return `True`. Android may also warn that the APK comes from outside an app store; only install a file whose checksum matches the published value.
+
+### Local builds
+
 ```powershell
 .\gradlew.bat :app:assembleDebug          # build debug APK
 .\gradlew.bat :app:installDebug           # build + install on connected device/emulator
@@ -60,6 +77,40 @@ The reception, filtering, normalization, multipart handling, and template logic 
 `compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), and Navigation 2.10.0.
 
 Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`). No keystore is committed.
+
+### Publishing a release
+
+The [Publish Android release workflow](.github/workflows/publish-android-release.yml) runs when a semantic version tag such as `1.0.3` is pushed. It checks that the tag equals `versionName`, runs the JVM tests, builds and verifies the signed APK, generates its SHA-256 checksum, and publishes both files as native GitHub Release assets. The stable links above automatically follow the latest release.
+
+Configure these encrypted repository secrets once under **Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `RELEASE_KEYSTORE_BASE64` | Base64 encoding of the release keystore file |
+| `RELEASE_KEYSTORE_PASSWORD` | Keystore password |
+| `RELEASE_KEY_ALIAS` | Signing key alias |
+| `RELEASE_KEY_PASSWORD` | Signing key password |
+
+The keystore must contain the same signing key as previous releases, otherwise Android will reject upgrades. To send its base64 representation directly to GitHub without creating another file:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\release.jks")) | gh secret set RELEASE_KEYSTORE_BASE64
+gh secret set RELEASE_KEYSTORE_PASSWORD
+gh secret set RELEASE_KEY_ALIAS
+gh secret set RELEASE_KEY_PASSWORD
+```
+
+The final three commands prompt securely for their values. Never put the keystore or passwords in the repository.
+
+For each release, increment `versionCode` and set `versionName` in `app/build.gradle.kts`, then commit and push the change before creating the matching tag:
+
+```powershell
+git tag 1.0.3
+git push origin master
+git push origin 1.0.3
+```
+
+The release is created only if all validation, tests, signing, and build steps succeed. Changes under `legal/` are independently deployed to GitHub Pages after a successful push to `master`; the website uses stable latest-release URLs, so it does not need a content update for every release.
 
 ## One-time Meta setup (WhatsApp)
 

@@ -2,7 +2,7 @@ name: Deploy legal pages to GitHub Pages
 
 # Publishes ONLY the legal/ folder as the GitHub Pages site. With this workflow
 # the documents are served at the site root, e.g.
-#   https://miguelcaldasms.github.io/MCSMSForwarderMultiChannel/privacy-policy.html
+#   https://miguelcaldasmsorg.github.io/MCSMSForwarderMultiChannel/privacy-policy.html
 #
 # To use it: repo Settings → Pages → Source = "GitHub Actions".
 # If you prefer the simpler branch deploy (Settings → Pages → Deploy from a

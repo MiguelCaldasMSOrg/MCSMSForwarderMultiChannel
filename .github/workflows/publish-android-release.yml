@@ -1,0 +1,89 @@
+name: Publish Android release
+
+on:
+  push:
+    tags:
+      - "*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+      ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+      ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v5
+
+      - name: Validate tag and signing secrets
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          version_name=$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)"/\1/p' app/build.gradle.kts)
+          version_code=$(sed -n 's/^[[:space:]]*versionCode = \([0-9][0-9]*\)/\1/p' app/build.gradle.kts)
+
+          if [[ -z "$version_name" || -z "$version_code" ]]; then
+            echo "Could not read versionName/versionCode from app/build.gradle.kts" >&2
+            exit 1
+          fi
+          if [[ ! "$GITHUB_REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' must use numeric major.minor.patch format" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_NAME" != "$version_name" ]]; then
+            echo "Tag '$GITHUB_REF_NAME' must match versionName '$version_name'" >&2
+            exit 1
+          fi
+          if [[ -z "$RELEASE_KEYSTORE_BASE64" || -z "$ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PASSWORD" || -z "$ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS" || -z "$ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD" ]]; then
+            echo "One or more release signing secrets are missing" >&2
+            exit 1
+          fi
+
+          echo "Publishing Android version $version_name (code $version_code)"
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore release keystore
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          keystore_path="$RUNNER_TEMP/release-signing.jks"
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          echo "ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
+
+      - name: Test and build signed APK
+        run: ./gradlew :app:testDebugUnitTest :app:assembleRelease --no-daemon
+
+      - name: Verify and prepare release assets
+        run: |
+          apk="app/build/outputs/apk/release/app-release.apk"
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+
+          test -f "$apk"
+          test -n "$apksigner"
+          "$apksigner" verify "$apk"
+
+          mkdir release-assets
+          cp "$apk" release-assets/MC.SMS.Forwarder.apk
+          cd release-assets
+          sha256sum MC.SMS.Forwarder.apk > MC.SMS.Forwarder.apk.sha256
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release-assets/MC.SMS.Forwarder.apk release-assets/MC.SMS.Forwarder.apk.sha256 --verify-tag --title "MC SMS Forwarder (Multi-Channel) $GITHUB_REF_NAME" --generate-notes --latest
