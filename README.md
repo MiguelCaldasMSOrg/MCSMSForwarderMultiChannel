@@ -102,12 +102,12 @@ gh secret set RELEASE_KEY_PASSWORD
 
 The final three commands prompt securely for their values. Never put the keystore or passwords in the repository.
 
-For each release, increment `versionCode` and set the no-prefix `versionName` in `app/build.gradle.kts`, then commit and push the change before creating the matching `v`-prefixed tag:
+For each release, increment `versionCode` and set the no-prefix `versionName` in `app/build.gradle.kts`, then commit and push the change before creating the matching annotated `v`-prefixed tag. The tag's numeric part must exactly match `versionName`:
 
 ```powershell
 git push origin master
-git tag v1.0.3          # Numeric part must exactly match versionName = "1.0.3".
-git push origin v1.0.3  # Triggers validation, build, signing, and publication.
+git tag -a v1.0.3 -m "Release 1.0.3"
+git push origin v1.0.3
 ```
 
 The release is created only if all validation, tests, signing, and build steps succeed. Changes under `legal/` are independently deployed to GitHub Pages after a successful push to `master`; the website uses stable latest-release URLs, so it does not need a content update for every release.
