@@ -3,7 +3,7 @@ name: Publish Android release
 on:
   push:
     tags:
-      - "*.*.*"
+      - "v*.*.*"
 
 permissions:
   contents: write
@@ -34,12 +34,13 @@ jobs:
             echo "Could not read versionName/versionCode from app/build.gradle.kts" >&2
             exit 1
           fi
-          if [[ ! "$GITHUB_REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Tag '$GITHUB_REF_NAME' must use numeric major.minor.patch format" >&2
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' must use vMAJOR.MINOR.PATCH format" >&2
             exit 1
           fi
-          if [[ "$GITHUB_REF_NAME" != "$version_name" ]]; then
-            echo "Tag '$GITHUB_REF_NAME' must match versionName '$version_name'" >&2
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "$tag_version" != "$version_name" ]]; then
+            echo "Tag version '$tag_version' must match Android versionName '$version_name'" >&2
             exit 1
           fi
           if [[ -z "$RELEASE_KEYSTORE_BASE64" || -z "$ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PASSWORD" || -z "$ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS" || -z "$ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD" ]]; then
@@ -86,4 +87,4 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-assets/MC.SMS.Forwarder.apk release-assets/MC.SMS.Forwarder.apk.sha256 --verify-tag --title "MC SMS Forwarder (Multi-Channel) $GITHUB_REF_NAME" --generate-notes --latest
+        run: gh release create "$GITHUB_REF_NAME" release-assets/MC.SMS.Forwarder.apk release-assets/MC.SMS.Forwarder.apk.sha256 --verify-tag --title "MC SMS Forwarder (Multi-Channel) ${GITHUB_REF_NAME#v}" --generate-notes --latest

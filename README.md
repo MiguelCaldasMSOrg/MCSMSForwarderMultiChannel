@@ -80,7 +80,7 @@ Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEA
 
 ### Publishing a release
 
-The [Publish Android release workflow](.github/workflows/publish-android-release.yml) runs when a semantic version tag such as `1.0.3` is pushed. It checks that the tag equals `versionName`, runs the JVM tests, builds and verifies the signed APK, generates its SHA-256 checksum, and publishes both files as native GitHub Release assets. The stable links above automatically follow the latest release.
+The [Publish Android release workflow](.github/workflows/publish-android-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests, builds and verifies the signed APK, generates its SHA-256 checksum, and publishes both files as native GitHub Release assets. The stable links above automatically follow the latest release.
 
 Configure these encrypted repository secrets once under **Settings → Secrets and variables → Actions**:
 
@@ -102,12 +102,12 @@ gh secret set RELEASE_KEY_PASSWORD
 
 The final three commands prompt securely for their values. Never put the keystore or passwords in the repository.
 
-For each release, increment `versionCode` and set `versionName` in `app/build.gradle.kts`, then commit and push the change before creating the matching tag:
+For each release, increment `versionCode` and set the no-prefix `versionName` in `app/build.gradle.kts`, then commit and push the change before creating the matching `v`-prefixed tag:
 
 ```powershell
-git tag 1.0.3
 git push origin master
-git push origin 1.0.3
+git tag v1.0.3          # Numeric part must exactly match versionName = "1.0.3".
+git push origin v1.0.3  # Triggers validation, build, signing, and publication.
 ```
 
 The release is created only if all validation, tests, signing, and build steps succeed. Changes under `legal/` are independently deployed to GitHub Pages after a successful push to `master`; the website uses stable latest-release URLs, so it does not need a content update for every release.
