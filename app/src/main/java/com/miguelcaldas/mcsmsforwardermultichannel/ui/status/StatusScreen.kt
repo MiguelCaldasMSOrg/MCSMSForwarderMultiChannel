@@ -1,6 +1,9 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.ui.status
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -24,12 +27,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -42,12 +49,26 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.R
+import kotlinx.coroutines.launch
 
 private val REQUIRED_PERMISSIONS = arrayOf(
     Manifest.permission.RECEIVE_SMS,
     Manifest.permission.SEND_SMS,
     Manifest.permission.POST_NOTIFICATIONS,
 )
+
+// Immediate forwarding is the app's core task-automation function and must remain available
+// when an SMS arrives while the device is in Doze. The system still requires user confirmation.
+@SuppressLint("BatteryLife")
+private fun requestBatteryOptimizationExemption(context: Context): Boolean {
+    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:${context.packageName}".toUri())
+    return try {
+        context.startActivity(intent)
+        true
+    } catch (_: ActivityNotFoundException) {
+        false
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,6 +78,8 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val blockers by viewModel.blockers.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
         viewModel.refresh()
@@ -68,9 +91,10 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
                 permissionLauncher.launch(REQUIRED_PERMISSIONS)
             }
             HealthAction.BATTERY_SETTINGS -> {
-                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:${context.packageName}".toUri())
-                if (intent.resolveActivity(context.packageManager) != null) {
-                    context.startActivity(intent)
+                if (!requestBatteryOptimizationExemption(context)) {
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Battery optimization settings are unavailable.")
+                    }
                 }
             }
             HealthAction.OPEN_CHANNELS -> {
@@ -95,6 +119,7 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
                 scrollBehavior = scrollBehavior,
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
         Column(
             modifier = Modifier

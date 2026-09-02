@@ -83,6 +83,14 @@ Needs the `SEND_SMS` permission. The only "credential" is the destination number
 `OnSharedPreferenceChangeListener`, so flipping the tile reactively updates the on-screen switch
 (no `onResume` re-sync needed).
 
+**Battery exemption**: the Status readiness checklist treats
+`PowerManager.isIgnoringBatteryOptimizations(packageName)` as required. Its action calls the
+dedicated `requestBatteryOptimizationExemption` helper, which directly launches Android's
+package-specific `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` confirmation. The helper has a
+scoped, documented `BatteryLife` suppression because immediate forwarding is core task-automation
+behavior. It catches `ActivityNotFoundException` and returns `false`, allowing the Compose screen
+to show a snackbar; do not reintroduce `resolveActivity`, which triggers package-visibility lint.
+
 **Boot**: `BootReceiver` exists purely to make the framework load the package on
 `BOOT_COMPLETED` (no real work; just a log line) so the manifest SMS receiver is warm before the
 first message.

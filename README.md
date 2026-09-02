@@ -18,7 +18,7 @@ Each channel is independently toggleable; enable one, two, or all three at once.
 
 The UI is a single-activity Jetpack Compose app with a Material 3 bottom-navigation bar:
 
-- **Status** — a master forwarding switch plus a **readiness checklist** that surfaces only the blocking setup items (permissions, battery exemption, missing credentials) as actionable fix chips, and a lifetime forwarding-stats card.
+- **Status** — a master forwarding switch plus a **readiness checklist** that surfaces only the blocking setup items (permissions, battery exemption, missing credentials) as actionable fix chips, and a lifetime forwarding-stats card. The battery action opens Android's package-specific confirmation; the user grants the exemption once and the app checks its current status thereafter.
 - **Channels** — WhatsApp, Telegram, and SMS as cards (status + enable switch); tap one to open its detail form, or open **Senders, rules & template** for the shared filters.
 - **Activity** — the log uses neutral send attempts, green successes, and red failures, with filter chips.
 
@@ -171,6 +171,12 @@ An SMS is attempted on **every channel whose toggle is on and whose credentials 
 ## Architecture
 
 Single-module Android app (`:app`), Kotlin. The UI is a single-activity Jetpack Compose app (Material 3) with a three-tab bottom navigation bar (Status, Channels, Activity) plus per-channel detail screens and a shared Filters screen.
+
+The Status screen requests the battery-optimization exemption through Android's
+`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` confirmation. The request is isolated behind a
+documented `BatteryLife` lint suppression because immediate forwarding is core task-automation
+behavior. If a device has no activity for the platform action, the screen reports that through a
+snackbar instead of silently doing nothing.
 
 **Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`mc_sms_fwd_wa`/`master_enabled`, default ON) → bail if no channel is operational (enabled toggle on AND credentials present) → reassemble multipart → SMS loop guard (suppress messages from the SMS forward destination) → match sender via `SenderMatcher` → normalize body via `TextNormalizer.normalizeForMatching` → compile each regex once and match any → apply optional `ForwardTemplate` → `BroadcastReceiver.goAsync()` → fan out the same body to **every operational channel** in parallel. A shared `AtomicInteger` counts pending channel callbacks; once they all complete, the receiver records exactly one stat (if any channel succeeded) and calls `pending.finish()`.
 
