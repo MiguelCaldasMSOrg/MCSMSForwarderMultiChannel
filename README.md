@@ -80,7 +80,7 @@ Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEA
 
 ### Publishing a release
 
-The [Publish Android release workflow](.github/workflows/publish-android-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests, builds and verifies the signed APK, generates its SHA-256 checksum, and publishes both files as native GitHub Release assets. The stable links above automatically follow the latest release.
+The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests, builds and verifies the signed APK, generates its SHA-256 checksum, and publishes both files as native GitHub Release assets. The stable links above automatically follow the latest release.
 
 Configure these encrypted repository secrets once under **Settings → Secrets and variables → Actions**:
 

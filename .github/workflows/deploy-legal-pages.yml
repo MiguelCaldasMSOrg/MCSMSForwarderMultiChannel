@@ -1,0 +1,46 @@
+name: Deploy legal pages
+run-name: Deploy legal pages from ${{ github.ref_name }}
+
+# Publishes the contents of legal/ at the GitHub Pages site root. Repository
+# Settings > Pages must use GitHub Actions as its source.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "legal/**"
+      - ".github/workflows/deploy-legal-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Serialize deployments so a newer run does not interrupt one already publishing.
+concurrency:
+  group: legal-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy-legal-pages:
+    name: Publish legal pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Pages source
+        uses: actions/checkout@v7
+
+      - name: Initialize GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Package legal directory as Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: legal
+
+      - name: Publish Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v5
