@@ -1,6 +1,6 @@
-name: Deploy legal pages to GitHub Pages
+name: Deploy stuff to GitHub Pages
 
-# Publishes ONLY the legal/ folder as the GitHub Pages site. With this workflow
+# Publishes the legal/ folder as the GitHub Pages site. With this workflow
 # the documents are served at the site root, e.g.
 #   https://miguelcaldasmsorg.github.io/MCSMSForwarderMultiChannel/privacy-policy.html
 #
@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Configure Pages
         uses: actions/configure-pages@v6
