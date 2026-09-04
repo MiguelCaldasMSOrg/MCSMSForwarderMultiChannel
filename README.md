@@ -32,8 +32,8 @@ The UI is a single-activity Jetpack Compose app with a Material 3 bottom-navigat
 - Reassembles multipart messages.
 - Drops everything unless the **master switch** is on.
 - Suppresses any message that arrives from the **SMS forward destination** (loop guard, SMS channel only).
-- Matches the sender against the **allowed senders** list (E.164 phone numbers via `PhoneNumberUtils.areSamePhoneNumber`, or case-insensitive exact match for alphanumeric IDs).
-- Normalizes the body (NFD + strip combining marks + lowercase) and matches it against **any** of the configured regex patterns.
+- Matches the sender against the **allowed senders** list (E.164 phone numbers via `PhoneNumberUtils.areSamePhoneNumber`, or case-insensitive exact match for alphanumeric IDs). Accents in sender IDs remain significant.
+- Normalizes the body (NFD + strip combining marks + lowercase) and matches it against **any** configured regex. Regex source is not normalized, so rules must be lowercase and accent-free.
 - Optionally re-formats the outgoing text with a template (`%s` = source, `%t` = time, `%m` = original message).
 - Sends the result through **every operational channel** (toggle on AND credentials present):
   - **WhatsApp** — `POST https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages` with a `Bearer` token, as an **approved template** message. The template name and language are fixed in code (the approved `titled_forwarded_sms` template); its body has two parameters — `{{1}}` is a fixed user name and `{{2}}` is the forwarded SMS body.
@@ -112,6 +112,83 @@ git push origin v1.0.3
 
 The release is created only if all validation, tests, signing, and build steps succeed. Changes under `legal/` are independently deployed to GitHub Pages after a successful push to `master`; the website uses stable latest-release URLs, so it does not need a content update for every release.
 
+## Encrypted configuration provisioning
+
+The app's runtime configuration can be initialized without typing every value on the phone. The
+single-file PowerShell 7 helper creates a passphrase-encrypted `.mcsmsconfig` bundle using
+PBKDF2-HMAC-SHA256 and AES-256-GCM. It supports the master switch, all three channel forms, allowed
+senders, regex rules, and the shared forwarding template:
+
+```powershell
+pwsh .\tools\New-ProvisioningBundle.ps1 `
+    -OutputPath "$HOME\Downloads\mc-sms-forwarder.mcsmsconfig"
+```
+
+The helper prompts for the included values and bundle passphrase; access tokens and the passphrase
+are hidden. It refuses to write the bundle inside this repository. Transfer the resulting file to
+the phone through a trusted channel, then open **Channels → Encrypted configuration → Import
+configuration** and enter its passphrase.
+
+The importer decrypts and validates the bundle in memory. Tokens are immediately re-encrypted by
+the app's Android Keystore-backed `SecureStore`; other supplied fields use the existing private
+preferences. The app does not retain a copy of the source bundle or persistent access to it, and
+imported values remain editable through the normal screens. Unknown or malformed settings reject
+the complete import before it becomes active.
+
+Provisioning is idempotent:
+
+- Omitted settings remain unchanged.
+- Supplied single-value settings replace their current value.
+- Allowed senders and regex rules are additive. Existing entries are never removed or reordered,
+  and a repeated import adds nothing.
+- Sender duplicates use the same case-insensitive/phone-number equivalence as live matching. Regex
+  duplicates require exact text equality because whitespace and case can affect a pattern.
+
+For non-interactive input, pass `-ConfigurationPath` with a JSON file using this shape:
+
+```json
+{
+  "masterEnabled": true,
+  "whatsApp": {
+    "enabled": true,
+    "phoneNumberId": "<phone-number-id>",
+    "accessToken": "<access-token>",
+    "recipient": "<recipient-number>"
+  },
+  "telegram": {
+    "enabled": false,
+    "botToken": "<bot-token>",
+    "chatId": "<chat-id>"
+  },
+  "sms": {
+    "enabled": false,
+    "destination": "<sms-destination>"
+  },
+  "filters": {
+    "allowedSenders": [
+      "<sender-or-number>",
+      "<another-sender>"
+    ],
+    "regexes": [
+      "<message-regex>",
+      "<another-regex>"
+    ],
+    "forwardTemplate": "[%t] %s: %m"
+  }
+}
+```
+
+Every top-level section and every field inside `filters` is optional. If a channel section is
+included, all of its displayed fields are required and credentials must be nonblank. Runtime
+permissions, the battery-optimization exemption, activity logs, forwarding statistics, and
+remembered dry-run test inputs are device/runtime state and are intentionally not provisioned.
+
+Keep that plaintext file outside every Git checkout and delete it securely when it is no longer
+needed. Treat the encrypted bundle as sensitive too, use a strong unique passphrase, keep it
+separately, and never
+commit either file. Android backup and device transfer deliberately exclude the encrypted secret
+preferences because the corresponding Keystore key cannot be transferred.
+
 ## One-time Meta setup (WhatsApp)
 
 The quickest development path is to use the **test phone number** Meta exposes in the App Dashboard. Test numbers and dashboard-managed test recipients are intended for development, not production-scale messaging. The custom `titled_forwarded_sms` template used by this app must still be approved for the connected WhatsApp Business Account.
@@ -180,7 +257,7 @@ The SMS channel re-sends matched messages from **this device's own SIM** — the
 
 Notes:
 - Carrier SMS charges apply to every forwarded message.
-- If the destination number is **also an allowed sender**, the loop guard suppresses its replies so the app can't ping-pong with itself. The Filters screen warns you when it detects this overlap.
+- If the destination number is **also an allowed sender**, the loop guard suppresses its replies so the app can't ping-pong with itself. The SMS channel screen warns after saving when it detects this overlap.
 - A successful *dispatch* (handed to the modem without error) is what the pipeline counts; the eventual delivery result is logged separately and asynchronously.
 
 ## In-app configuration
@@ -189,14 +266,14 @@ Filters are shared by every channel and live on the **Channels** tab under **Sen
 
 **Filtering (shared by all channels)**
 
-- **Allowed senders** — editable rows; phone numbers or alphanumeric IDs. Tap **Add sender** to append a row, type into it, and use the row's delete button to remove it.
-- **Message format rules** — editable rows; regex patterns, a message is forwarded if **any** pattern matches. Tap **Add rule** to append a row. With no rules, nothing is forwarded.
+- **Allowed senders** — editable rows; phone numbers or alphanumeric IDs. Phone formatting and letter case are ignored when matching, but accents in IDs must match Android's raw sender value. Tap **Add sender** to append a row, type into it, and use the row's delete button to remove it.
+- **Message format rules** — editable rows containing lowercase, accent-free regex patterns. The message body is normalized to that form before matching and is forwarded if **any** pattern matches. Tap **Add rule** to append a row. With no rules, nothing is forwarded.
 - **Forwarding template** (optional) — `%s`, `%t`, `%m` tokens.
 - **Test a message** — an inline card that dry-runs a sample sender + message against the filters as currently shown on screen (no need to save first); the message starts blank and the sender defaults to the first phone in the list, both remembered from the last test. Nothing is sent.
 
 **WhatsApp Cloud API** (Channels tab → WhatsApp)
 
-- **Enabled** — master toggle for the channel.
+- **Enabled** — toggle for this channel.
 - **WhatsApp Phone Number ID** — numeric, from Meta.
 - **Access token** — Bearer token; stored encrypted at rest and write-only in the UI (see warning above).
 - **WhatsApp Recipient Phone Number** — destination number with country code and no `+` (e.g. `351912345678`).
@@ -206,18 +283,18 @@ The message template is **fixed in code** (`WhatsAppCloudChannel`), not chosen i
 
 **Telegram Bot API** (Channels tab → Telegram)
 
-- **Enabled** — master toggle for the channel (off by default).
+- **Enabled** — toggle for this channel (off by default).
 - **Bot token** — from @BotFather; stored encrypted at rest and write-only in the UI.
 - **Chat ID** — numeric (positive for DMs, negative for groups).
 - **Send test** button — POSTs a synthetic message using the currently displayed token and chat ID without saving them.
 
 **SMS** (Channels tab → SMS)
 
-- **Enabled** — master toggle for the channel (off by default).
+- **Enabled** — toggle for this channel (off by default).
 - **Destination number** — where matched messages are re-sent, in E.164 form (`+35191XXXXXXX`).
 - **Send test** button — re-sends a synthetic message from this device's SIM to the currently displayed destination without saving it.
 
-An SMS is attempted on **every channel whose toggle is on and whose credentials are complete**. Each outcome is logged separately. The activity stats counter increments once when at least one channel accepts the message, regardless of how many channels succeed.
+A matched incoming message is forwarded through **every channel whose toggle is on and whose credentials are complete**. Each outcome is logged separately. The activity stats counter increments once when at least one channel accepts the message, regardless of how many channels succeed.
 
 ## Architecture
 
@@ -229,7 +306,7 @@ documented `BatteryLife` lint suppression because immediate forwarding is core t
 behavior. If a device has no activity for the platform action, the screen reports that through a
 snackbar instead of silently doing nothing.
 
-**Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`mc_sms_fwd_wa`/`master_enabled`, default ON) → bail if no channel is operational (enabled toggle on AND credentials present) → reassemble multipart → SMS loop guard (suppress messages from the SMS forward destination) → match sender via `SenderMatcher` → normalize body via `TextNormalizer.normalizeForMatching` → compile each regex once and match any → apply optional `ForwardTemplate` → `BroadcastReceiver.goAsync()` → fan out the same body to **every operational channel** in parallel. A shared `AtomicInteger` counts pending channel callbacks; once they all complete, the receiver records exactly one stat (if any channel succeeded) and calls `pending.finish()`.
+**Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`mc_sms_fwd_wa`/`master_enabled`, default ON) → bail if no channel is operational (enabled toggle on AND credentials present) → reassemble multipart → SMS loop guard (suppress messages from the SMS forward destination) → match sender via `SenderMatcher` → normalize the body via `TextNormalizer.normalizeForMatching` (rules themselves remain unchanged) → compile each regex once and match any → apply optional `ForwardTemplate` → `BroadcastReceiver.goAsync()` → fan out the same body to **every operational channel** in parallel. A shared `AtomicInteger` counts pending channel callbacks; once they all complete, the receiver records exactly one stat (if any channel succeeded) and calls `pending.finish()`.
 
 `WhatsAppCloudChannel`, `TelegramChannel`, and `SmsChannel` are sibling singletons. The two HTTP channels share `HttpJsonClient` (a thin `HttpURLConnection` wrapper) and start each request immediately on cached daemon executors (`wa-sender` / `tg-sender`), so overlapping sends run concurrently rather than waiting or being rejected. Each has an 8.5-second completion deadline plus 8-second connect/read safeguards. A request still unwinding after the completion deadline is logged as having unknown delivery and no longer holds the SMS broadcast open. Each channel reports `SEND OK`/`SEND FAILED` with the HTTP status and provider-specific error summary (Meta `error.{code,type,message}` for WhatsApp, Telegram `error_code` + `description` for Telegram). Neither ever logs its bearer/bot token. `SmsChannel` dispatches through `SmsManager.sendMultipartTextMessage` and registers a private result receiver that logs the modem's per-segment outcome. Stats are owned solely by `SmsReceiver` — the channels only log.
 

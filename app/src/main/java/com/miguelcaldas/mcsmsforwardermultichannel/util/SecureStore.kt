@@ -1,5 +1,6 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.util
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
@@ -58,6 +59,26 @@ object SecureStore {
                 putString(key, encrypt(value.trim()))
             }
         }
+    }
+
+    /**
+     * Encrypts every value before committing any of them, then persists the complete update
+     * synchronously so provisioning can report storage failures.
+     */
+    @SuppressLint("UseKtx")
+    fun writeAll(context: Context, values: Map<String, String>) {
+        val encrypted = values.mapValues { (_, value) ->
+            value.trim().takeIf { it.isNotEmpty() }?.let(::encrypt)
+        }
+        val editor = prefs(context).edit()
+        encrypted.forEach { (key, value) ->
+            if (value == null) {
+                editor.remove(key)
+            } else {
+                editor.putString(key, value)
+            }
+        }
+        check(editor.commit()) { "Could not persist encrypted channel credentials" }
     }
 
     private fun encrypt(value: String): String {

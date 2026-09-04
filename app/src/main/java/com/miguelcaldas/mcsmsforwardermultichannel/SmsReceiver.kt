@@ -8,6 +8,7 @@ import android.telephony.PhoneNumberUtils
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardStatsStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
+import com.miguelcaldas.mcsmsforwardermultichannel.util.MasterSwitchStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderMatcher
@@ -30,7 +31,7 @@ class SmsReceiver: BroadcastReceiver() {
         val prefs = context.getSharedPreferences("mc_sms_fwd_wa", Context.MODE_PRIVATE)
         // Master kill-switch: one prefs key checked before any work. Default ON so existing
         // installs are unaffected.
-        if (!prefs.getBoolean("master_enabled", true)) {
+        if (!MasterSwitchStore.load(prefs)) {
             return
         }
 
@@ -50,7 +51,7 @@ class SmsReceiver: BroadcastReceiver() {
         if (patterns.isEmpty()) {
             return
         }
-        val forwardTemplate = prefs.getString("forwardTemplate", "").orEmpty()
+        val forwardTemplate = prefs.getString(ForwardTemplate.KEY, "").orEmpty()
 
         // The telephony framework reassembles concatenated SMS using the UDH (reference,
         // total parts, sequence number) and only broadcasts SMS_RECEIVED once every part
@@ -87,9 +88,9 @@ class SmsReceiver: BroadcastReceiver() {
         // Compile each pattern at most once per call; the previous form rebuilt Regex
         // objects inside `any { }` on every iteration. Patterns that fail to compile
         // are silently treated as non-matches — a single malformed entry never blocks
-        // the others. Diacritics are stripped and the body is lowercased before matching
-        // so patterns can be written without accents or case worries; the original body
-        // (accents and case preserved) is still what gets forwarded.
+        // the others. The body, but not the regex source, is stripped of diacritics and
+        // lowercased before matching, so patterns must be authored lowercase and accent-free.
+        // The original body (accents and case preserved) is still what gets forwarded.
         val normalizedBody = TextNormalizer.normalizeForMatching(fullBody)
         val bodyMatches = patterns.asSequence()
             .mapNotNull { runCatching { Regex(it) }.getOrNull() }

@@ -4,7 +4,7 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 
 object RegexListStore {
-    private const val KEY = "messageFormat"
+    internal const val KEY = "messageFormat"
 
     // Newline is the only separator: commas, spaces, etc. can appear inside regexes.
     // Entries are not trimmed because leading/trailing whitespace can be a deliberate

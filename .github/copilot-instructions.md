@@ -8,8 +8,9 @@
 .\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
 ```
 
-Focused JVM tests cover the concurrency/deadline helper. No instrumentation suite is configured;
-use Gradle lint for Android static checks.
+Focused JVM tests cover the concurrency/deadline helper and encrypted provisioning format,
+including PowerShell interoperability. No instrumentation suite is configured; use Gradle lint
+for Android static checks.
 
 The build uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
 `targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00
@@ -22,14 +23,15 @@ Single-module Android app (`:app`), Kotlin. The UI is **Jetpack Compose** (Mater
 `AppRoot` hosts a `NavController` that routes between screens (status, channels, filters, log).
 Each screen has an `AndroidViewModel` exposing `StateFlow` draft state.
 
-**Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`prefs.getBoolean("master_enabled", true)`,
+**Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`MasterSwitchStore.load`, default ON),
 default ON) → bail if **no channel is operational** (each channel: enabled toggle on AND credentials
 present) or senders / regexes are empty → reassemble multipart → **SMS loop guard** (drop messages
 from the SMS forward destination via `PhoneNumberUtils.areSamePhoneNumber`; SMS channel only) →
 match sender against allowed list via `SenderMatcher` (`PhoneNumberUtils.areSamePhoneNumber` +
-case-insensitive exact match for alphanumeric IDs) → normalize body with
+case-insensitive exact match for alphanumeric IDs; accents remain significant) → normalize body with
 `TextNormalizer.normalizeForMatching` (NFD + strip combining marks + lowercase) → compile each
-regex once and match any (`runCatching` per pattern; invalid patterns silently skip) → apply
+unchanged regex source and match any (`runCatching` per pattern; invalid patterns silently skip;
+rules must therefore be lowercase and accent-free) → apply
 optional `ForwardTemplate` (`%s`/`%t`/`%m` tokens) → `goAsync()` keeps the receiver alive →
 **fan out the same body to every operational channel** (`WhatsAppCloudChannel`, `TelegramChannel`,
 `SmsChannel`). A shared `AtomicInteger remaining` counts pending channel callbacks; each
@@ -43,7 +45,7 @@ SMS→SMS echo cannot bounce indefinitely. WhatsApp and Telegram run on a differ
 cannot re-trigger the pipeline, so the guard is scoped to the SMS channel's destination.
 
 **Channel pattern.** Each channel is a `XxxConfig` immutable data class (`enabled` flag + fields +
-`hasCredentials`/`isOperational` + `load(prefs)` + `KEY_*` consts) paired with a `XxxChannel`
+`hasCredentials`/`isOperational` + `load(prefs/context)` + `KEY_*` consts) paired with a `XxxChannel`
 `object` exposing `send(context, config, body, onComplete: (Boolean) -> Unit = {}): Boolean`. Channels log
 `SEND OK [Channel]` / `SEND FAILED [Channel]` and never log secrets. **Channels never record
 stats** — `SmsReceiver` owns the single increment per matched SMS.
@@ -95,14 +97,16 @@ to show a snackbar; do not reintroduce `resolveActivity`, which triggers package
 `BOOT_COMPLETED` (no real work; just a log line) so the manifest SMS receiver is warm before the
 first message.
 
-**Persistence**: everything is in a single `SharedPreferences` file named `mc_sms_fwd_wa`. No
-database. Lists (senders, regexes) are newline-delimited strings. Logs use a
+**Persistence**: non-secret state uses a single `SharedPreferences` file named `mc_sms_fwd_wa`; the
+two channel tokens use the separate encrypted store described below. There is no database. Lists
+(senders, regexes) are newline-delimited strings. Logs use a
 `timestamp\x1Fmessage` format with auto-pruning (35 days / 2000 entries); `LogUtils.addToLog`
 collapses CR/LF/`\x1F` runs in the message to a space so multi-line bodies can't corrupt the
 line-oriented format. WhatsApp credentials live under keys defined in `WhatsAppConfig`:
-`waPhoneNumberId`, `waRecipient`, `waEnabled` (default true). The template is fixed in code (see
-the WhatsApp channel above), so there are no template prefs. Telegram: `tgEnabled` (default
-false), `tgChatId` (`TelegramConfig`). SMS: `smsEnabled` (default false) and
+`waPhoneNumberId`, `waRecipient`, `waEnabled` (default true). The WhatsApp API template is fixed in
+code (see the WhatsApp channel above); the separate shared forwarding template uses
+`forwardTemplate`. Telegram: `tgEnabled` (default false), `tgChatId` (`TelegramConfig`). SMS:
+`smsEnabled` (default false) and
 `forwardTo` — the destination number (`SmsConfig`). **Secrets (the WhatsApp access token `waAccessToken` and
 the Telegram bot token `tgBotToken`) are NOT in this file** — `SecureStore` encrypts them with
 AES/GCM using a key held by Android Keystore, then stores the ciphertext in the private
@@ -110,25 +114,40 @@ AES/GCM using a key held by Android Keystore, then stores the ciphertext in the 
 `SecureStore.read(context, …)`, so `WhatsAppConfig.load`/`TelegramConfig.load` take a `Context`
 (not a `SharedPreferences`).
 
-**Screens** are Compose, each backed by an `AndroidViewModel`. Edits mutate in-memory draft
-`StateFlow`s and are persisted only when the user taps the screen's explicit **Save** button (no
-debounced auto-save). On the Filters screen the allowed senders and message-format rules are each
+**Encrypted provisioning**: the Channels screen can import a `.mcsmsconfig` bundle generated by
+`tools/New-ProvisioningBundle.ps1`. The PowerShell 7 helper stays in one file, prompts securely by
+default, refuses repository-local inputs/outputs, and encrypts a versioned JSON payload using
+PBKDF2-HMAC-SHA256 plus AES-256-GCM. It can carry the master switch, WhatsApp, Telegram, SMS,
+allowed senders, regex rules, and the shared forwarding template. `ProvisioningBundle` bounds and
+validates the envelope before decrypting, writes tokens through `SecureStore.writeAll`, and writes
+only supplied scalar fields to the normal preferences. Sender/rule lists are merge-only:
+existing entries are never deleted or reordered, sender equivalence follows `SenderMatcher`, and
+regex duplicates use exact equality. Reapplying a bundle is idempotent. Imports never log or retain
+secrets, and manual edits remain available afterward. Applying a bundle first disables the master
+switch and included channels, commits the public fields, commits encrypted secrets, and only then
+restores the requested enabled states; rollback restores the prior snapshot, while an unrecoverable
+partial write stays disabled. The `mc_sms_fwd_secure` preferences file is excluded from Android
+backup and device transfer because its Keystore key cannot be transferred.
+
+**Screens** are Compose, each backed by an `AndroidViewModel`. Manual form edits mutate in-memory
+draft `StateFlow`s and are persisted only when the user taps the screen's explicit **Save** button
+(no debounced auto-save); encrypted bundle import is a separate explicit action that persists after
+passphrase confirmation. On the Filters screen the allowed senders and message-format rules are each
 rendered as a list of editable `OutlinedTextField` rows with a per-row delete button (order is not
 significant); blank rows are dropped on save and ignored by the live pipeline. Channel **Send test**
 actions use the currently displayed draft values without saving them.
 
 ## Conventions
 
-- **Util objects** in `util/` are Kotlin `object` singletons (not classes). They take
-  `SharedPreferences` or `Context` as parameters — no dependency injection. Current set:
-  `SenderListStore`, `RegexListStore`, `SenderMatcher`, `TextNormalizer`, `ForwardTemplate`,
-  `ForwardStatsStore`, `WhatsAppConfig`, `WhatsAppCloudChannel`, `TelegramConfig`,
-  `TelegramChannel`, `SmsConfig`, `SmsChannel`, `SecureStore`, `LogUtils`.
+- Utility stores, matchers, formatters, channels, and provisioning code in `util/` are Kotlin
+  `object` singletons that take `SharedPreferences` or `Context` directly; there is no dependency
+  injection. `WhatsAppConfig`, `TelegramConfig`, and `SmsConfig` are immutable data classes loaded
+  by their companion objects.
 - **Edge-to-edge** is enabled once in `MainActivity.onCreate` via `enableEdgeToEdge()`; Compose
   `Scaffold` + window-inset padding handle the rest per screen.
-- **Regex matching** uses `TextNormalizer.normalizeForMatching` (NFD + strip combining marks +
-  lowercase) so patterns can be written accent-free and case-free. Invalid regexes are
-  silently treated as non-matches.
+- **Regex matching** uses `TextNormalizer.normalizeForMatching` to transform the message body only
+  (NFD + strip combining marks + lowercase). Regex source is unchanged, so patterns must be written
+  lowercase and accent-free. Invalid regexes are silently treated as non-matches.
 - **Version catalog** (`gradle/libs.versions.toml`) manages all dependency and SDK versions;
   `app/build.gradle.kts` references them via `libs.*`.
 - **Kotlin formatting preference**: keep inheritance/type colons tight for class declarations

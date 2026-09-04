@@ -3,10 +3,14 @@ package com.miguelcaldas.mcsmsforwardermultichannel.ui.channels
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.miguelcaldas.mcsmsforwardermultichannel.R
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ProvisioningBundle
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ProvisioningException
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SecureStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderMatcher
@@ -16,9 +20,15 @@ import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramChannel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppCloudChannel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppConfig
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.security.GeneralSecurityException
 
 /** The three outbound channels, used as nav arguments and to pick the right detail form. */
 enum class ChannelType(val title: String, val iconRes: Int) {
@@ -37,12 +47,21 @@ enum class ChannelTone {
 /** Pre-computed row state for the channels list. */
 data class ChannelSummary(val type: ChannelType, val enabled: Boolean, val status: String, val tone: ChannelTone)
 
+sealed interface ProvisioningImportState {
+    data object Idle : ProvisioningImportState
+    data object Importing : ProvisioningImportState
+    data class Complete(val message: String) : ProvisioningImportState
+}
+
 class ChannelsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs: SharedPreferences = application.getSharedPreferences("mc_sms_fwd_wa", Context.MODE_PRIVATE)
 
     private val _channels = MutableStateFlow<List<ChannelSummary>>(emptyList())
     val channels: StateFlow<List<ChannelSummary>> = _channels.asStateFlow()
+
+    private val _provisioningImportState = MutableStateFlow<ProvisioningImportState>(ProvisioningImportState.Idle)
+    val provisioningImportState: StateFlow<ProvisioningImportState> = _provisioningImportState.asStateFlow()
 
     /** Recompute every channel summary. Call on resume and after any edit. */
     fun refresh() {
@@ -139,7 +158,73 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         refresh()
     }
 
-    /** Returns a warning to surface, or null. Mirrors the old loop-guard heads-up. */
+    fun importProvisioningBundle(uri: Uri, passphrase: String) {
+        if (_provisioningImportState.value == ProvisioningImportState.Importing) {
+            return
+        }
+        _provisioningImportState.value = ProvisioningImportState.Importing
+        val passphraseCharacters = passphrase.toCharArray()
+
+        viewModelScope.launch {
+            val message = withContext(Dispatchers.IO) {
+                try {
+                    val bundleJson = readProvisioningBundle(uri)
+                    val configuration = ProvisioningBundle.decrypt(bundleJson, passphraseCharacters)
+                    ProvisioningBundle.save(getApplication(), configuration)
+                } catch (error: ProvisioningException) {
+                    error.message ?: "Could not import the configuration."
+                } catch (_: IOException) {
+                    "Could not read the selected configuration file."
+                } catch (_: SecurityException) {
+                    "Android did not grant access to the selected configuration file."
+                } catch (_: GeneralSecurityException) {
+                    "Android could not securely store the imported credentials."
+                } catch (_: IllegalStateException) {
+                    "Android could not save the imported configuration."
+                } finally {
+                    passphraseCharacters.fill('\u0000')
+                }
+            }
+            refresh()
+            _provisioningImportState.value = ProvisioningImportState.Complete(message)
+        }
+    }
+
+    fun clearProvisioningImportResult() {
+        if (_provisioningImportState.value is ProvisioningImportState.Complete) {
+            _provisioningImportState.value = ProvisioningImportState.Idle
+        }
+    }
+
+    @Throws(IOException::class, ProvisioningException::class)
+    private fun readProvisioningBundle(uri: Uri): String {
+        val input = getApplication<Application>().contentResolver.openInputStream(uri)
+            ?: throw IOException("The selected document could not be opened")
+        return input.use {
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var totalBytes = 0
+            while (true) {
+                val bytesRead = it.read(buffer)
+                if (bytesRead < 0) {
+                    break
+                }
+                totalBytes += bytesRead
+                if (totalBytes > ProvisioningBundle.MAX_BUNDLE_BYTES) {
+                    throw ProvisioningException("The configuration file is too large.")
+                }
+                output.write(buffer, 0, bytesRead)
+            }
+            val bytes = output.toByteArray()
+            try {
+                String(bytes, Charsets.UTF_8)
+            } finally {
+                bytes.fill(0)
+            }
+        }
+    }
+
+    /** Returns the loop-guard advisory shown after saving SMS settings, or null. */
     fun saveSms(enabled: Boolean, destination: String): String? {
         prefs.edit {
             putBoolean(SmsConfig.KEY_ENABLED, enabled)

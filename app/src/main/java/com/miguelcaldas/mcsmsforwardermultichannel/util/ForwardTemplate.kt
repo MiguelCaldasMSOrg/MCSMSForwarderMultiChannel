@@ -5,6 +5,8 @@ import java.util.Date
 import java.util.Locale
 
 object ForwardTemplate {
+    const val KEY = "forwardTemplate"
+
     // Single-pass substitution of %s/%t/%m so tokens inside `message` are not re-expanded
     // and a literal `%` followed by any other character is left untouched.
     fun apply(template: String, source: String, timestampMillis: Long, message: String): String {

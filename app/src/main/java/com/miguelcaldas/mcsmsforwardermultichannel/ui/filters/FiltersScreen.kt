@@ -149,7 +149,7 @@ private fun SendersCard(
         Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Allowed senders", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Phone numbers (with country code, e.g. +35191XXXXXX) or short names (e.g. AMAZON, MB WAY). Only messages from these senders are forwarded.",
+                "Phone numbers (with country code, e.g. +35191XXXXXX) or sender IDs (e.g. AMAZON, MB WAY). Case is ignored for IDs, but accents must match the sender reported by Android.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             if (senders.isEmpty()) {
@@ -187,7 +187,7 @@ private fun RulesCard(
         Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Message format rules", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Regular expressions matched against the message body (accent- and case-insensitive). A message forwards if it matches any rule. With no rules, nothing is forwarded.",
+                "The message body is lowercased and stripped of accents before regex matching. Write rules lowercase and accent-free. A message forwards if any rule matches; with no rules, nothing is forwarded.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             if (rules.isEmpty()) {

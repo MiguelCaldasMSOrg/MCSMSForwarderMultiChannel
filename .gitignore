@@ -15,6 +15,7 @@ captures/
 # Keystore files
 *.jks
 *.keystore
+*.mcsmsconfig
 
 # Test-script artifacts
 /ui.xml
