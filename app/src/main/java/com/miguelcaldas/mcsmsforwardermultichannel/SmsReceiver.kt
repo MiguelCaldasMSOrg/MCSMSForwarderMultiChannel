@@ -8,6 +8,7 @@ import android.telephony.PhoneNumberUtils
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardStatsStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
+import com.miguelcaldas.mcsmsforwardermultichannel.util.MasterSwitchStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderMatcher
@@ -30,7 +31,7 @@ class SmsReceiver: BroadcastReceiver() {
         val prefs = context.getSharedPreferences("mc_sms_fwd_wa", Context.MODE_PRIVATE)
         // Master kill-switch: one prefs key checked before any work. Default ON so existing
         // installs are unaffected.
-        if (!prefs.getBoolean("master_enabled", true)) {
+        if (!MasterSwitchStore.load(prefs)) {
             return
         }
 
@@ -50,7 +51,7 @@ class SmsReceiver: BroadcastReceiver() {
         if (patterns.isEmpty()) {
             return
         }
-        val forwardTemplate = prefs.getString("forwardTemplate", "").orEmpty()
+        val forwardTemplate = prefs.getString(ForwardTemplate.KEY, "").orEmpty()
 
         // The telephony framework reassembles concatenated SMS using the UDH (reference,
         // total parts, sequence number) and only broadcasts SMS_RECEIVED once every part

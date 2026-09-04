@@ -112,6 +112,80 @@ git push origin v1.0.3
 
 The release is created only if all validation, tests, signing, and build steps succeed. Changes under `legal/` are independently deployed to GitHub Pages after a successful push to `master`; the website uses stable latest-release URLs, so it does not need a content update for every release.
 
+## Encrypted configuration provisioning
+
+The app's runtime configuration can be initialized without typing every value on the phone. The
+single-file PowerShell 7 helper creates a passphrase-encrypted `.mcsmsconfig` bundle using
+PBKDF2-HMAC-SHA256 and AES-256-GCM. It supports the master switch, all three channel forms, allowed
+senders, regex rules, and the shared forwarding template:
+
+```powershell
+pwsh .\tools\New-ProvisioningBundle.ps1 `
+    -OutputPath "$HOME\Downloads\mc-sms-forwarder.mcsmsconfig"
+```
+
+The helper prompts for the included values and bundle passphrase; access tokens and the passphrase
+are hidden. It refuses to write the bundle inside this repository. Transfer the resulting file to
+the phone through a trusted channel, then open **Channels → Encrypted configuration → Import
+configuration** and enter its passphrase.
+
+The importer decrypts and validates the bundle in memory. Tokens are immediately re-encrypted by
+the app's Android Keystore-backed `SecureStore`; other supplied fields use the existing private
+preferences. The app does not retain a copy of the source bundle or persistent access to it, and
+imported values remain editable through the normal screens.
+
+Provisioning is idempotent:
+
+- Omitted settings remain unchanged.
+- Supplied single-value settings replace their current value.
+- Allowed senders and regex rules are additive. Existing entries are never removed or reordered,
+  and a repeated import adds nothing.
+- Sender duplicates use the same case-insensitive/phone-number equivalence as live matching. Regex
+  duplicates require exact text equality because whitespace and case can affect a pattern.
+
+For non-interactive input, pass `-ConfigurationPath` with a JSON file using this shape:
+
+```json
+{
+  "masterEnabled": true,
+  "whatsApp": {
+    "enabled": true,
+    "phoneNumberId": "<phone-number-id>",
+    "accessToken": "<access-token>",
+    "recipient": "<recipient-number>"
+  },
+  "telegram": {
+    "enabled": false,
+    "botToken": "<bot-token>",
+    "chatId": "<chat-id>"
+  },
+  "sms": {
+    "enabled": false,
+    "destination": "<sms-destination>"
+  },
+  "filters": {
+    "allowedSenders": [
+      "<sender-or-number>",
+      "<another-sender>"
+    ],
+    "regexes": [
+      "<message-regex>",
+      "<another-regex>"
+    ],
+    "forwardTemplate": "[%t] %s: %m"
+  }
+}
+```
+
+Every top-level section and every field inside `filters` is optional. Runtime permissions, the
+battery-optimization exemption, activity logs, forwarding statistics, and remembered dry-run test
+inputs are device/runtime state and are intentionally not provisioned.
+
+Keep that plaintext file outside every Git checkout and delete it securely when it is no longer
+needed. Treat the encrypted bundle as sensitive too, keep its passphrase separately, and never
+commit either file. Android backup and device transfer deliberately exclude the encrypted secret
+preferences because the corresponding Keystore key cannot be transferred.
+
 ## One-time Meta setup (WhatsApp)
 
 The quickest development path is to use the **test phone number** Meta exposes in the App Dashboard. Test numbers and dashboard-managed test recipients are intended for development, not production-scale messaging. The custom `titled_forwarded_sms` template used by this app must still be approved for the connected WhatsApp Business Account.

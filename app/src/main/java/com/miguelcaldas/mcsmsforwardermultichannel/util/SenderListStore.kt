@@ -4,7 +4,7 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 
 object SenderListStore {
-    private const val KEY = "allowedSenders"
+    internal const val KEY = "allowedSenders"
 
     fun load(prefs: SharedPreferences): List<String> =
         prefs.getString(KEY, "")?.split('\n')?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()

@@ -8,9 +8,9 @@ import android.content.pm.PackageManager
 import android.os.PowerManager
 import android.text.format.DateUtils
 import androidx.core.content.ContextCompat
-import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardStatsStore
+import com.miguelcaldas.mcsmsforwardermultichannel.util.MasterSwitchStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SmsConfig
@@ -40,7 +40,7 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
 
     private val prefs: SharedPreferences = application.getSharedPreferences("mc_sms_fwd_wa", Context.MODE_PRIVATE)
 
-    private val _masterEnabled = MutableStateFlow(prefs.getBoolean("master_enabled", true))
+    private val _masterEnabled = MutableStateFlow(MasterSwitchStore.load(prefs))
     val masterEnabled: StateFlow<Boolean> = _masterEnabled.asStateFlow()
 
     private val _stats = MutableStateFlow(StatsUi("0", "—", "—"))
@@ -54,8 +54,8 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
         if (key == null || key in STAT_KEYS) {
             refreshStats()
         }
-        if (key == "master_enabled") {
-            _masterEnabled.value = prefs.getBoolean("master_enabled", true)
+        if (key == MasterSwitchStore.KEY_ENABLED) {
+            _masterEnabled.value = MasterSwitchStore.load(prefs)
         }
     }
 
@@ -64,15 +64,13 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setMasterEnabled(enabled: Boolean) {
-        prefs.edit {
-            putBoolean("master_enabled", enabled)
-        }
+        MasterSwitchStore.save(prefs, enabled)
         _masterEnabled.value = enabled
     }
 
     /** Re-read the master switch, stats and readiness checks. Call when the screen resumes. */
     fun refresh() {
-        _masterEnabled.value = prefs.getBoolean("master_enabled", true)
+        _masterEnabled.value = MasterSwitchStore.load(prefs)
         refreshStats()
         refreshBlockers()
     }

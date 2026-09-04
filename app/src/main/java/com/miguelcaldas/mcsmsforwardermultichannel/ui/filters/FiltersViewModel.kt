@@ -31,7 +31,7 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
     private val _rules = MutableStateFlow(RegexListStore.load(prefs))
     val rules: StateFlow<List<String>> = _rules.asStateFlow()
 
-    private val _template = MutableStateFlow(prefs.getString(KEY_TEMPLATE, "").orEmpty())
+    private val _template = MutableStateFlow(prefs.getString(ForwardTemplate.KEY, "").orEmpty())
     val template: StateFlow<String> = _template.asStateFlow()
 
     // Edits mutate in-memory draft state only; nothing is persisted until save() is called,
@@ -176,7 +176,7 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         SenderListStore.save(prefs, _senders.value)
         RegexListStore.save(prefs, _rules.value)
         prefs.edit {
-            putString(KEY_TEMPLATE, _template.value)
+            putString(ForwardTemplate.KEY, _template.value)
         }
     }
 
@@ -193,7 +193,6 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private companion object {
-        const val KEY_TEMPLATE = "forwardTemplate"
         const val KEY_LAST_TEST_SENDER = "lastTestSender"
         const val KEY_LAST_TEST_MESSAGE = "lastTestMessage"
     }
