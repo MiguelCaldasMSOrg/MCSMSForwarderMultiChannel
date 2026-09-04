@@ -15,6 +15,9 @@ for Android static checks.
 The build uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
 `targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00
 (Material 3 follows the BOM), Navigation 2.10, and Google Code Scanner 16.1.
+Gradle's per-variant `GenerateBuildMetadataTask` generates `GeneratedBuildMetadata` at task
+execution; local builds use the current time and Git `HEAD` (`-dirty` when applicable), while
+`BUILD_TIMESTAMP_EPOCH_MILLIS`/`BUILD_SOURCE_REVISION` overrides support deterministic builds.
 
 ## Architecture
 
@@ -86,6 +89,11 @@ Needs the `SEND_SMS` permission. The only "credential" is the destination number
 `Switch` both write the same `master_enabled` pref. `StatusViewModel` registers an
 `OnSharedPreferenceChangeListener`, so flipping the tile reactively updates the on-screen switch
 (no `onResume` re-sync needed).
+
+**Build information**: the Status screen ends with a low-emphasis outlined About card. It reads
+`BuildConfig.VERSION_NAME`, the generated UTC build epoch, and the source revision through
+`BuildMetadata`. Release Actions captures one timestamp immediately before the Gradle
+test/build invocation; `GITHUB_SHA` supplies the release source revision.
 
 **Battery exemption**: the Status readiness checklist treats
 `PowerManager.isIgnoringBatteryOptimizations(packageName)` as required. Its action calls the

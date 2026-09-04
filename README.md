@@ -18,7 +18,7 @@ Each channel is independently toggleable; enable one, two, or all three at once.
 
 The UI is a single-activity Jetpack Compose app with a Material 3 bottom-navigation bar:
 
-- **Status** — a master forwarding switch plus a **readiness checklist** that surfaces only the blocking setup items (permissions, battery exemption, missing credentials) as actionable fix chips, and a lifetime forwarding-stats card. The battery action opens Android's package-specific confirmation; the user grants the exemption once and the app checks its current status thereafter.
+- **Status** — a master forwarding switch plus a **readiness checklist** that surfaces only the blocking setup items (permissions, battery exemption, missing credentials) as actionable fix chips, a lifetime forwarding-stats card, and a subdued build-information card. The battery action opens Android's package-specific confirmation; the user grants the exemption once and the app checks its current status thereafter.
 - **Channels** — WhatsApp, Telegram, and SMS as cards (status + enable switch); tap one to open its detail form, or open **Senders, rules & template** for the shared filters.
 - **Activity** — the log uses neutral send attempts, green successes, red failures, and amber filter rejections, with filter chips for each category.
 
@@ -95,6 +95,20 @@ The command must return `True`. Android may also warn that the APK comes from ou
 `compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), Navigation 2.10.0, and Google Code Scanner 16.1.0.
 
 Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`). No keystore is committed.
+
+Each APK embeds its version, UTC build timestamp, and source revision for the **About** card
+at the bottom of the Status screen. Local builds use the current time and Git `HEAD`; `-dirty` is
+appended when the working tree has changes. Embedding the current time intentionally makes
+otherwise identical builds differ. Reproducible builds can provide stable values:
+
+```powershell
+.\gradlew.bat :app:assembleRelease `
+    -PBUILD_TIMESTAMP_EPOCH_MILLIS=1788539573000 `
+    -PBUILD_SOURCE_REVISION=3ac2192d
+```
+
+The release workflow captures one timestamp immediately before its test/build invocation and uses
+GitHub's checked-out commit SHA.
 
 ### Publishing a release
 
@@ -336,6 +350,10 @@ A matched incoming message is forwarded through **every channel whose toggle is 
 ## Architecture
 
 Single-module Android app (`:app`), Kotlin. The UI is a single-activity Jetpack Compose app (Material 3) with a three-tab bottom navigation bar (Status, Channels, Activity) plus per-channel detail screens and a shared Filters screen.
+
+`BuildMetadata` combines `BuildConfig.VERSION_NAME` with execution-time generated metadata for the
+Status screen's About card: the build instant in UTC and source revision. This is build provenance
+for troubleshooting, not an update check.
 
 The Status screen requests the battery-optimization exemption through Android's
 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` confirmation. The request is isolated behind a

@@ -25,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -47,6 +48,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.R
+import com.miguelcaldas.mcsmsforwardermultichannel.util.BuildMetadata
 import kotlinx.coroutines.launch
 
 private val REQUIRED_PERMISSIONS = arrayOf(
@@ -147,6 +149,23 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
                 onReset = {
                     viewModel.resetStats()
                 },
+            )
+
+            BuildInfoCard()
+        }
+    }
+}
+
+@Composable
+private fun BuildInfoCard() {
+    OutlinedCard {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)) {
+            Text(BuildMetadata.title, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                BuildMetadata.details,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

@@ -70,6 +70,9 @@ jobs:
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
           echo "ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
 
+      - name: Capture build timestamp
+        run: echo "BUILD_TIMESTAMP_EPOCH_MILLIS=$(date +%s%3N)" >> "$GITHUB_ENV"
+
       - name: Run unit tests and assemble signed release APK
         run: ./gradlew :app:testDebugUnitTest :app:assembleRelease --no-daemon
 
