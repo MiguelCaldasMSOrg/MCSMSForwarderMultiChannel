@@ -13,6 +13,7 @@ import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardStatsStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.MasterSwitchStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
+import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderMatcher
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SmsConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppConfig
@@ -128,8 +129,18 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
             require(hasPermission(Manifest.permission.SEND_SMS), "Grant SMS sending", "Grant", HealthAction.GRANT_PERMISSIONS)
             require(smsConfig.destination.isNotEmpty(), "Add SMS destination", "Open", HealthAction.OPEN_CHANNELS)
         }
-        require(SenderListStore.load(prefs).any { it.isNotBlank() }, "Add an allowed sender", "Filters", HealthAction.OPEN_FILTERS)
-        require(RegexListStore.load(prefs).isNotEmpty(), "Add a match rule", "Filters", HealthAction.OPEN_FILTERS)
+        require(
+            SenderListStore.load(prefs).any(SenderMatcher::isValidRegex),
+            "Add a valid sender rule",
+            "Filters",
+            HealthAction.OPEN_FILTERS,
+        )
+        require(
+            RegexListStore.load(prefs).any { runCatching { Regex(it) }.isSuccess },
+            "Add a valid message rule",
+            "Filters",
+            HealthAction.OPEN_FILTERS,
+        )
 
         _blockers.value = items
     }

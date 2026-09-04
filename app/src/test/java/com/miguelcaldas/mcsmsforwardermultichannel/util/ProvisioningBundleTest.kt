@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.nio.charset.StandardCharsets
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
@@ -43,11 +44,18 @@ class ProvisioningBundleTest {
             javaClass.getResource("/powershell-provisioning-expanded-v1.json"),
         ).readText()
 
-        val result = ProvisioningBundle.decrypt(bundle, "audit-passphrase-🔐-123".toCharArray())
+        val result = ProvisioningBundle.decrypt(bundle, "sender-rules-passphrase-123".toCharArray())
 
         assertEquals(true, result.masterEnabled)
         assertEquals("+351911111111", result.sms?.destination)
-        assertEquals(listOf("Chave Móvel Digital", "+351922222222"), result.filters?.allowedSenders)
+        assertEquals(
+            listOf(
+                SenderRule("literal sender"),
+                SenderRule("^chave.*digital$", isRegex = true),
+                SenderRule("chave movel digital"),
+            ),
+            result.filters?.allowedSenders,
+        )
         assertEquals(listOf("""codigo\s+\d+""", "^alerta"), result.filters?.regexes)
         assertEquals("[%t] %s: %m", result.filters?.forwardTemplate)
     }
@@ -71,14 +79,24 @@ class ProvisioningBundleTest {
         val payload = JSONObject().put(
             "filters",
             JSONObject()
-                .put("allowedSenders", listOf(" BankAlerts ", "bankalerts", "+351922222222"))
+                .put(
+                    "allowedSenders",
+                    listOf(
+                        JSONObject().put("value", "BankAlerts").put("regex", false),
+                        JSONObject().put("value", "bankalerts").put("regex", false),
+                        JSONObject().put("value", "+351922222222").put("regex", false),
+                    ),
+                )
                 .put("regexes", listOf("^alert", "^alert", "^ALERT"))
                 .put("forwardTemplate", ""),
         )
 
         val result = ProvisioningBundle.decrypt(encrypt(payload), passphrase)
 
-        assertEquals(listOf("BankAlerts", "+351922222222"), result.filters?.allowedSenders)
+        assertEquals(
+            listOf(SenderRule("BankAlerts"), SenderRule("bankalerts"), SenderRule("+351922222222")),
+            result.filters?.allowedSenders,
+        )
         assertEquals(listOf("^alert", "^ALERT"), result.filters?.regexes)
         assertEquals("", result.filters?.forwardTemplate)
         assertEquals(null, result.whatsApp)
@@ -97,6 +115,51 @@ class ProvisioningBundleTest {
 
         assertEquals(
             "Configuration payload contains an unsupported value.",
+            error.message,
+        )
+    }
+
+    @Test
+    fun acceptsModeAwareSenderRules() {
+        val payload = JSONObject().put(
+            "filters",
+            JSONObject().put(
+                "allowedSenders",
+                listOf(
+                    JSONObject()
+                        .put("value", "literal sender")
+                        .put("regex", false),
+                    JSONObject()
+                        .put("value", "^chave.*digital$")
+                        .put("regex", true),
+                ),
+            ),
+        )
+
+        val result = ProvisioningBundle.decrypt(encrypt(payload), passphrase)
+
+        assertEquals(
+            listOf(
+                SenderRule("literal sender"),
+                SenderRule("^chave.*digital$", isRegex = true),
+            ),
+            result.filters?.allowedSenders,
+        )
+    }
+
+    @Test
+    fun rejectsSenderRulesWithoutExplicitMode() {
+        val payload = JSONObject().put(
+            "filters",
+            JSONObject().put("allowedSenders", listOf("implicit literal")),
+        )
+
+        val error = assertThrows(ProvisioningException::class.java) {
+            ProvisioningBundle.decrypt(encrypt(payload), passphrase)
+        }
+
+        assertEquals(
+            "Configuration value 'allowedSenders' must contain only sender-rule objects.",
             error.message,
         )
     }
@@ -132,7 +195,13 @@ class ProvisioningBundleTest {
     fun rejectsEntriesThatCannotBeStoredLosslessly() {
         val payload = JSONObject().put(
             "filters",
-            JSONObject().put("allowedSenders", listOf("valid", "line\nbreak")),
+            JSONObject().put(
+                "allowedSenders",
+                listOf(
+                    JSONObject().put("value", "valid").put("regex", false),
+                    JSONObject().put("value", "line\nbreak").put("regex", false),
+                ),
+            ),
         )
 
         val error = assertThrows(ProvisioningException::class.java) {
@@ -176,7 +245,9 @@ class ProvisioningBundleTest {
 
     @Test
     fun rejectsExcessiveListEntries() {
-        val senders = List(1_001) { index -> "sender-$index" }
+        val senders = List(1_001) { index ->
+            JSONObject().put("value", "sender-$index").put("regex", false)
+        }
         val payload = JSONObject().put(
             "filters",
             JSONObject().put("allowedSenders", senders),
@@ -232,6 +303,35 @@ class ProvisioningBundleTest {
         }
 
         assertEquals("Passphrase must contain 12 to 1024 characters.", error.message)
+    }
+
+    @Test
+    fun decodesPasteAndQrImportCode() {
+        val envelope = encrypt(JSONObject().put("masterEnabled", true))
+        val encoded = Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(envelope.toByteArray(StandardCharsets.UTF_8))
+
+        assertEquals(
+            envelope,
+            ProvisioningBundle.decodeImportCode("mcsmsconfig:v1:$encoded"),
+        )
+    }
+
+    @Test
+    fun acceptsRawEnvelopeAsPasteCode() {
+        val envelope = encrypt(JSONObject().put("masterEnabled", true))
+
+        assertEquals(envelope, ProvisioningBundle.decodeImportCode("  $envelope  "))
+    }
+
+    @Test
+    fun rejectsMalformedImportCode() {
+        val error = assertThrows(ProvisioningException::class.java) {
+            ProvisioningBundle.decodeImportCode("not-a-provisioning-code")
+        }
+
+        assertEquals("This is not a valid MC SMS Forwarder import code.", error.message)
     }
 
     @Test

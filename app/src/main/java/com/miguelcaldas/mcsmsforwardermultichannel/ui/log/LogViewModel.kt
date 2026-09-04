@@ -11,8 +11,29 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-enum class LogFilter { All, SendOk, SendFailed, Boot }
+enum class LogFilter { All, SendOk, SendFailed, FilterRejected, Boot }
 enum class LogClearState { Idle, Clearing, Failed }
+
+internal enum class LogEntryType { SendOk, SendFailed, FilterRejected, Boot, Other }
+
+internal fun classifyLogEntry(entry: String): LogEntryType {
+    val message = entry.substringAfter(" \u2192 ", entry)
+    return when {
+        message.startsWith("${LogUtils.FILTER_REJECTED_PREFIX} \u2192") -> LogEntryType.FilterRejected
+        message.startsWith("SEND OK [") -> LogEntryType.SendOk
+        message.startsWith("SEND FAILED [") -> LogEntryType.SendFailed
+        message.startsWith("BOOT \u2192") || message.startsWith("TILE \u2192") -> LogEntryType.Boot
+        else -> LogEntryType.Other
+    }
+}
+
+internal fun matchesLogFilter(entry: String, filter: LogFilter): Boolean = when (filter) {
+    LogFilter.All -> true
+    LogFilter.SendOk -> classifyLogEntry(entry) == LogEntryType.SendOk
+    LogFilter.SendFailed -> classifyLogEntry(entry) == LogEntryType.SendFailed
+    LogFilter.FilterRejected -> classifyLogEntry(entry) == LogEntryType.FilterRejected
+    LogFilter.Boot -> classifyLogEntry(entry) == LogEntryType.Boot
+}
 
 /**
  * Holds the activity-log screen state. Reads entries through [LogUtils] (backed by
@@ -74,15 +95,8 @@ class LogViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun refresh() {
         viewModelScope.launch {
-            _logs.value = LogUtils.getLogs(getApplication()).filter { matchesFilter(it, _filter.value) }
+            _logs.value = LogUtils.getLogs(getApplication()).filter { matchesLogFilter(it, _filter.value) }
         }
-    }
-
-    private fun matchesFilter(entry: String, filter: LogFilter): Boolean = when (filter) {
-        LogFilter.All -> true
-        LogFilter.SendOk -> entry.contains("SEND OK")
-        LogFilter.SendFailed -> entry.contains("FAILED")
-        LogFilter.Boot -> entry.contains("BOOT \u2192") || entry.contains("TILE \u2192")
     }
 
     override fun onCleared() {

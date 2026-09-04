@@ -10,6 +10,8 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 object LogUtils {
+    const val FILTER_REJECTED_PREFIX = "FILTER REJECTED"
+
     private const val PREFS = "mc_sms_fwd_wa"
     private const val LOGS_KEY = "logs_v2"
     private const val FIELD_SEP = "\u001F"
@@ -27,9 +29,9 @@ object LogUtils {
 
     // The on-disk format is line-oriented (`timestamp\x1Fmessage`, entries joined by
     // '\n'), so a message that itself contains a newline or the field separator would
-    // break parsing and silently truncate the entry. Forwarded SMS bodies (logged in
-    // the REAL SEND entries) routinely contain line breaks, so collapse any CR/LF/0x1F
-    // run to a single space before storing — the log viewer renders one line per entry.
+    // break parsing and silently truncate the entry. Forwarded and filter-rejected SMS bodies
+    // routinely contain line breaks, so collapse any CR/LF/0x1F run to a single space before
+    // storing — the log viewer renders one line per entry.
     private val CONTROL_RUN = Regex("[\\r\\n\\u001F]+")
 
     fun addToLog(context: Context, logEntry: String) {

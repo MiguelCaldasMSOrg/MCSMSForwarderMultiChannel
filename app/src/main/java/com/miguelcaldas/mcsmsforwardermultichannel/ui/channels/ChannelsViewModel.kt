@@ -159,6 +159,22 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun importProvisioningBundle(uri: Uri, passphrase: String) {
+        importProvisioning(passphrase) {
+            readProvisioningBundle(uri)
+        }
+    }
+
+    fun importProvisioningCode(importCode: String, passphrase: String) {
+        importProvisioning(passphrase) {
+            ProvisioningBundle.decodeImportCode(importCode)
+        }
+    }
+
+    fun reportProvisioningMessage(message: String) {
+        _provisioningImportState.value = ProvisioningImportState.Complete(message)
+    }
+
+    private fun importProvisioning(passphrase: String, readBundle: () -> String) {
         if (_provisioningImportState.value == ProvisioningImportState.Importing) {
             return
         }
@@ -168,7 +184,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val message = withContext(Dispatchers.IO) {
                 try {
-                    val bundleJson = readProvisioningBundle(uri)
+                    val bundleJson = readBundle()
                     val configuration = ProvisioningBundle.decrypt(bundleJson, passphraseCharacters)
                     ProvisioningBundle.save(getApplication(), configuration)
                 } catch (error: ProvisioningException) {
@@ -239,7 +255,7 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         if (!config.enabled || config.destination.isEmpty()) {
             return null
         }
-        val allowed = SenderListStore.load(prefs).filter { it.isNotBlank() }
+        val allowed = SenderListStore.load(prefs)
         if (allowed.isEmpty()) {
             return null
         }

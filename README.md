@@ -14,17 +14,28 @@ Each channel is independently toggleable; enable one, two, or all three at once.
 
 | Status / readiness | Channels | Activity log |
 | --- | --- | --- |
-| ![Status tab: a forwarding master switch, an "All systems go" readiness card, and a lifetime forwarding-stats card](docs/screenshots/status.png) | ![Channels tab: WhatsApp, Telegram, and SMS cards each with their own icon, a status line, and an enable switch](docs/screenshots/channels.png) | ![Activity tab: send attempts and outcomes with filter chips and Share / Clear actions](docs/screenshots/activity-log.png) |
+| ![Compact Status tab: a forwarding master switch, an "All systems go" readiness card, and lifetime forwarding stats](docs/screenshots/status.png) | ![Compact Channels tab: WhatsApp, Telegram, and SMS cards plus the shared filters card and overflow menu](docs/screenshots/channels.png) | ![Activity tab: successful real channel outcomes, filter-rejection diagnostics, filter chips, and Share / Clear actions](docs/screenshots/activity-log.png) |
 
 The UI is a single-activity Jetpack Compose app with a Material 3 bottom-navigation bar:
 
 - **Status** — a master forwarding switch plus a **readiness checklist** that surfaces only the blocking setup items (permissions, battery exemption, missing credentials) as actionable fix chips, and a lifetime forwarding-stats card. The battery action opens Android's package-specific confirmation; the user grants the exemption once and the app checks its current status thereafter.
 - **Channels** — WhatsApp, Telegram, and SMS as cards (status + enable switch); tap one to open its detail form, or open **Senders, rules & template** for the shared filters.
-- **Activity** — the log uses neutral send attempts, green successes, and red failures, with filter chips.
+- **Activity** — the log uses neutral send attempts, green successes, red failures, and amber filter rejections, with filter chips for each category.
 
-| Channel detail (WhatsApp) | Filters |
+| Channel detail (WhatsApp) | Sender rules | Filter-rejection diagnostic |
+| --- | --- | --- |
+| ![WhatsApp detail form with sensitive fields redacted: enable switch, Phone Number ID, write-only token, recipient, Send test, and Save](docs/screenshots/channel-whatsapp.png) | ![Filters screen with sender values redacted: compact literal and RegEx rows, a RegEx chip, delete control, and Add sender action](docs/screenshots/filters.png) | ![Activity tab filtered to Filter rejected, with raw content redacted](docs/screenshots/filter-rejected.png) |
+
+| Provisioning menu | Paste encrypted code | QR scanner |
+| --- | --- | --- |
+| ![Channels overflow menu offering file/cloud, QR, and paste provisioning routes](docs/screenshots/provisioning-menu.png) | ![Paste encrypted import code dialog](docs/screenshots/provisioning-paste.png) | ![Google Code Scanner opened for an encrypted configuration QR code](docs/screenshots/provisioning-qr.png) |
+
+| Passphrase confirmation | Idempotent re-import |
 | --- | --- |
-| ![WhatsApp detail form: enable switch, WhatsApp Phone Number ID, write-only Access token, recipient with a country-code hint, Send test / Save](docs/screenshots/channel-whatsapp.png) | ![Filters screen: allowed senders and regex rules as editable rows, each with a delete button and an add-row action](docs/screenshots/filters.png) |
+| ![Encrypted configuration import dialog asking for the bundle passphrase and explaining merge behavior](docs/screenshots/provisioning-import.png) | ![Channels screen showing a successful re-import that added zero duplicate senders or rules](docs/screenshots/provisioning-result.png) |
+
+Sensitive credential, account, phone, sender, and message regions are irreversibly redacted in the
+documentation images.
 
 ## What it does
 
@@ -32,8 +43,11 @@ The UI is a single-activity Jetpack Compose app with a Material 3 bottom-navigat
 - Reassembles multipart messages.
 - Drops everything unless the **master switch** is on.
 - Suppresses any message that arrives from the **SMS forward destination** (loop guard, SMS channel only).
-- Matches the sender against the **allowed senders** list (E.164 phone numbers via `PhoneNumberUtils.areSamePhoneNumber`, or case-insensitive exact match for alphanumeric IDs). Accents in sender IDs remain significant.
 - Normalizes the body (NFD + strip combining marks + lowercase) and matches it against **any** configured regex. Regex source is not normalized, so rules must be lowercase and accent-free.
+- Normalizes the raw sender the same way, then matches it against literal entries or full-string sender regexes exactly as entered. Textual sender rules must therefore be lowercase and accent-free; literal phone numbers retain `PhoneNumberUtils.areSamePhoneNumber`.
+- Forwards only when both a sender rule and a message rule match.
+- If exactly one component matches, records a **Filter rejected** activity entry containing the full raw sender and message plus the component that failed, then does not forward.
+- If neither component matches, does nothing.
 - Optionally re-formats the outgoing text with a template (`%s` = source, `%t` = time, `%m` = original message).
 - Sends the result through **every operational channel** (toggle on AND credentials present):
   - **WhatsApp** — `POST https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages` with a `Bearer` token, as an **approved template** message. The template name and language are fixed in code (the approved `titled_forwarded_sms` template); its body has two parameters — `{{1}}` is a fixed user name and `{{2}}` is the forwarded SMS body.
@@ -41,6 +55,10 @@ The UI is a single-activity Jetpack Compose app with a Material 3 bottom-navigat
   - **SMS** — `SmsManager.sendMultipartTextMessage` to the configured destination number; per-segment modem results are surfaced in the activity log.
 
 The reception, filtering, normalization, multipart handling, and template logic are shared by all channels.
+
+> **Sensitive logs:** Filter-rejected entries intentionally retain the full raw sender and message
+> for troubleshooting. They follow the normal 35-day/2,000-entry pruning policy and are included
+> when you use **Share**, so clear or share the log accordingly.
 
 ## What is NOT included
 
@@ -74,7 +92,7 @@ The command must return `True`. Android may also warn that the APK comes from ou
 .\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
 ```
 
-`compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), and Navigation 2.10.0.
+`compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), Navigation 2.10.0, and Google Code Scanner 16.1.0.
 
 Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`). No keystore is committed.
 
@@ -121,13 +139,24 @@ senders, regex rules, and the shared forwarding template:
 
 ```powershell
 pwsh .\tools\New-ProvisioningBundle.ps1 `
-    -OutputPath "$HOME\Downloads\mc-sms-forwarder.mcsmsconfig"
+    -OutputPath "$HOME\Downloads\mc-sms-forwarder.mcsmsconfig" `
+    -QrCodePath "$HOME\Downloads\mc-sms-forwarder-qr.png"
 ```
 
 The helper prompts for the included values and bundle passphrase; access tokens and the passphrase
-are hidden. It refuses to write the bundle inside this repository. Transfer the resulting file to
-the phone through a trusted channel, then open **Channels → Encrypted configuration → Import
-configuration** and enter its passphrase.
+are hidden. It refuses to write output inside this repository. The Channels overflow menu provides
+three equivalent inputs:
+
+- **Choose file or cloud drive** — Android's document picker can select local storage or an
+  installed cloud provider.
+- **Scan configuration QR code** — scan the helper's local QR from the computer screen. Google Play
+  services processes the image on-device; the app does not request camera permission.
+- **Paste encrypted import code** — add `-CopyImportCode` when running the helper, transfer the
+  encrypted code separately from its passphrase, and paste it into the app.
+
+All three routes ask for the same passphrase and use the same authenticated importer. QR generation
+requires Node.js/npm; the helper runs the pinned `qrcode` 1.5.4 package locally and never submits
+the code to a QR web service.
 
 The importer decrypts and validates the bundle in memory. Tokens are immediately re-encrypted by
 the app's Android Keystore-backed `SecureStore`; other supplied fields use the existing private
@@ -141,8 +170,9 @@ Provisioning is idempotent:
 - Supplied single-value settings replace their current value.
 - Allowed senders and regex rules are additive. Existing entries are never removed or reordered,
   and a repeated import adds nothing.
-- Sender duplicates use the same case-insensitive/phone-number equivalence as live matching. Regex
-  duplicates require exact text equality because whitespace and case can affect a pattern.
+- Sender duplicates are mode-aware: literal and RegEx forms remain distinct, exact rule text is
+  deduplicated, and equivalent literal phone numbers are not added twice. Message-regex duplicates
+  require exact text equality because whitespace and case can affect a pattern.
 
 For non-interactive input, pass `-ConfigurationPath` with a JSON file using this shape:
 
@@ -166,8 +196,14 @@ For non-interactive input, pass `-ConfigurationPath` with a JSON file using this
   },
   "filters": {
     "allowedSenders": [
-      "<sender-or-number>",
-      "<another-sender>"
+      {
+        "value": "^chave.*digital$",
+        "regex": true
+      },
+      {
+        "value": "mb way",
+        "regex": false
+      }
     ],
     "regexes": [
       "<message-regex>",
@@ -182,6 +218,7 @@ Every top-level section and every field inside `filters` is optional. If a chann
 included, all of its displayed fields are required and credentials must be nonblank. Runtime
 permissions, the battery-optimization exemption, activity logs, forwarding statistics, and
 remembered dry-run test inputs are device/runtime state and are intentionally not provisioned.
+Every `allowedSenders` entry must explicitly provide both `value` and `regex`.
 
 Keep that plaintext file outside every Git checkout and delete it securely when it is no longer
 needed. Treat the encrypted bundle as sensitive too, use a strong unique passphrase, keep it
@@ -266,10 +303,10 @@ Filters are shared by every channel and live on the **Channels** tab under **Sen
 
 **Filtering (shared by all channels)**
 
-- **Allowed senders** — editable rows; phone numbers or alphanumeric IDs. Phone formatting and letter case are ignored when matching, but accents in IDs must match Android's raw sender value. Tap **Add sender** to append a row, type into it, and use the row's delete button to remove it.
-- **Message format rules** — editable rows containing lowercase, accent-free regex patterns. The message body is normalized to that form before matching and is forwarded if **any** pattern matches. Tap **Add rule** to append a row. With no rules, nothing is forwarded.
+- **Allowed senders** — incoming sender text is lowercased and stripped of accents before matching. Write text rules lowercase and accent-free. A sender matches if any literal or full-string RegEx rule matches; phone-number literals use phone-aware comparison. With no sender rules, no sender matches.
+- **Message format rules** — incoming message text is lowercased and stripped of accents before matching. Write RegEx rules lowercase and accent-free. A message matches if any RegEx rule matches. With no message rules, no message matches.
 - **Forwarding template** (optional) — `%s`, `%t`, `%m` tokens.
-- **Test a message** — an inline card that dry-runs a sample sender + message against the filters as currently shown on screen (no need to save first); the message starts blank and the sender defaults to the first phone in the list, both remembered from the last test. Nothing is sent.
+- **Test a message** — an inline card that dry-runs a sample sender + message against the filters as currently shown on screen (no need to save first); the message starts blank and the sender defaults to the first phone-like literal rule, then the first literal rule, while both fields remember the last test. Nothing is sent or logged.
 
 **WhatsApp Cloud API** (Channels tab → WhatsApp)
 
@@ -306,7 +343,7 @@ documented `BatteryLife` lint suppression because immediate forwarding is core t
 behavior. If a device has no activity for the platform action, the screen reports that through a
 snackbar instead of silently doing nothing.
 
-**Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`mc_sms_fwd_wa`/`master_enabled`, default ON) → bail if no channel is operational (enabled toggle on AND credentials present) → reassemble multipart → SMS loop guard (suppress messages from the SMS forward destination) → match sender via `SenderMatcher` → normalize the body via `TextNormalizer.normalizeForMatching` (rules themselves remain unchanged) → compile each regex once and match any → apply optional `ForwardTemplate` → `BroadcastReceiver.goAsync()` → fan out the same body to **every operational channel** in parallel. A shared `AtomicInteger` counts pending channel callbacks; once they all complete, the receiver records exactly one stat (if any channel succeeded) and calls `pending.finish()`.
+**Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`mc_sms_fwd_wa`/`master_enabled`, default ON) → bail if no channel is operational (enabled toggle on AND credentials present) → reassemble multipart → SMS loop guard (suppress messages from the SMS forward destination) → normalize the body via `TextNormalizer.normalizeForMatching` while leaving regex source unchanged → compile each message regex once and match any → normalize the raw sender and match literal/full-string RegEx sender rules exactly as stored (phone literals keep phone-aware comparison) → evaluate the sender/message truth table: both match = forward, exactly one matches = log `FILTER REJECTED` with the raw sender/message and failed component, neither matches = ignore → apply optional `ForwardTemplate` → `BroadcastReceiver.goAsync()` → fan out the same body to **every operational channel** in parallel. A shared `AtomicInteger` counts pending channel callbacks; once they all complete, the receiver records exactly one stat (if any channel succeeded) and calls `pending.finish()`.
 
 `WhatsAppCloudChannel`, `TelegramChannel`, and `SmsChannel` are sibling singletons. The two HTTP channels share `HttpJsonClient` (a thin `HttpURLConnection` wrapper) and start each request immediately on cached daemon executors (`wa-sender` / `tg-sender`), so overlapping sends run concurrently rather than waiting or being rejected. Each has an 8.5-second completion deadline plus 8-second connect/read safeguards. A request still unwinding after the completion deadline is logged as having unknown delivery and no longer holds the SMS broadcast open. Each channel reports `SEND OK`/`SEND FAILED` with the HTTP status and provider-specific error summary (Meta `error.{code,type,message}` for WhatsApp, Telegram `error_code` + `description` for Telegram). Neither ever logs its bearer/bot token. `SmsChannel` dispatches through `SmsManager.sendMultipartTextMessage` and registers a private result receiver that logs the modem's per-segment outcome. Stats are owned solely by `SmsReceiver` — the channels only log.
 

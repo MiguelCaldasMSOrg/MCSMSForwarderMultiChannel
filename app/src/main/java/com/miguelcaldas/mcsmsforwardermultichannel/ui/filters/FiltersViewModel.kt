@@ -6,13 +6,16 @@ import android.telephony.PhoneNumberUtils
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
+import com.miguelcaldas.mcsmsforwardermultichannel.util.InboundFilterDecision
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderMatcher
+import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderRule
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SmsConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.TextNormalizer
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppConfig
+import com.miguelcaldas.mcsmsforwardermultichannel.util.decideInboundFilter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,7 +29,7 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
     private val prefs = application.getSharedPreferences("mc_sms_fwd_wa", Context.MODE_PRIVATE)
 
     private val _senders = MutableStateFlow(SenderListStore.load(prefs))
-    val senders: StateFlow<List<String>> = _senders.asStateFlow()
+    val senders: StateFlow<List<SenderRule>> = _senders.asStateFlow()
 
     private val _rules = MutableStateFlow(RegexListStore.load(prefs))
     val rules: StateFlow<List<String>> = _rules.asStateFlow()
@@ -36,22 +39,30 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
 
     // Edits mutate in-memory draft state only; nothing is persisted until save() is called,
     // mirroring the explicit Save button on the channel detail screens. Senders and rules are
-    // edited in place as a list of free-text rows: each row is an editable field plus a delete
-    // button. Order is not significant, so rows are addressed by index and blank rows are simply
-    // dropped on save() (and ignored by the live pipeline). Duplicate/invalid-pattern checks are
-    // intentionally not enforced while typing — they would fight the user mid-edit.
+    // edited in place as a list of free-text rows: sender rows also carry a literal/RegEx mode.
+    // Order is not significant, so rows are addressed by index and blank rows are simply dropped
+    // on save() (and ignored by the live pipeline). Invalid-pattern checks are shown by the UI but
+    // do not prevent editing or saving.
     fun updateSender(index: Int, value: String) {
         // Newlines would corrupt the newline-delimited store, so collapse them away.
         val sanitized = value.replace('\n', ' ').replace('\r', ' ')
         _senders.value = _senders.value.toMutableList().also {
             if (index in it.indices) {
-                it[index] = sanitized
+                it[index] = it[index].copy(value = sanitized)
+            }
+        }
+    }
+
+    fun setSenderRegex(index: Int, isRegex: Boolean) {
+        _senders.value = _senders.value.toMutableList().also {
+            if (index in it.indices) {
+                it[index] = it[index].copy(isRegex = isRegex)
             }
         }
     }
 
     fun addSender() {
-        _senders.value = _senders.value + ""
+        _senders.value = _senders.value + SenderRule("")
     }
 
     fun removeSenderAt(index: Int) {
@@ -93,8 +104,8 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         if (!saved.isNullOrBlank()) {
             return saved
         }
-        val senders = _senders.value.filter { it.isNotBlank() }
-        return senders.firstOrNull { looksLikePhone(it) } ?: senders.firstOrNull() ?: ""
+        val senders = _senders.value.filter { !it.isRegex && it.value.isNotBlank() }
+        return senders.firstOrNull { looksLikePhone(it.value) }?.value ?: senders.firstOrNull()?.value.orEmpty()
     }
 
     private fun looksLikePhone(value: String): Boolean {
@@ -121,7 +132,7 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
             putString(KEY_LAST_TEST_MESSAGE, message)
         }
 
-        val allowedSenders = _senders.value.filter { it.isNotBlank() }
+        val allowedSenders = _senders.value.filter { it.value.isNotBlank() }
         val rules = _rules.value.filter { it.isNotBlank() }
         val template = _template.value
 
@@ -152,7 +163,10 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         }
 
         val outgoingBody = if (template.isEmpty()) message else ForwardTemplate.apply(template, sender, System.currentTimeMillis(), message)
-        val wouldSend = !suppressedByLoopGuard && senderAllowed && ruleMatches && operationalChannels.isNotEmpty()
+        val filterDecision = decideInboundFilter(senderAllowed, ruleMatches)
+        val wouldSend = !suppressedByLoopGuard &&
+            filterDecision == InboundFilterDecision.FORWARD &&
+            operationalChannels.isNotEmpty()
 
         val builder = StringBuilder()
         builder.append("Sender allowed: ").append(if (senderAllowed) "yes" else "no").append(" (against ").append(allowedSenders.size).append(" entries)\n")
@@ -162,11 +176,18 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         }
         builder.append("Operational channels: ").append(if (operationalChannels.isEmpty()) "none" else operationalChannels.joinToString(", ")).append('\n')
         builder.append('\n')
-        if (wouldSend) {
-            builder.append("Would forward to ").append(operationalChannels.joinToString(", ")).append(":\n")
-            builder.append('"').append(outgoingBody).append('"')
-        } else {
-            builder.append("Would not forward.")
+        when {
+            suppressedByLoopGuard -> builder.append("Would not forward: SMS loop guard.")
+            operationalChannels.isEmpty() -> builder.append("Would not forward: no operational channels.")
+            wouldSend -> {
+                builder.append("Would forward to ").append(operationalChannels.joinToString(", ")).append(":\n")
+                builder.append('"').append(outgoingBody).append('"')
+            }
+            filterDecision == InboundFilterDecision.SENDER_REJECTED ->
+                builder.append("Would not forward. Would log FILTER REJECTED: sender did not match.")
+            filterDecision == InboundFilterDecision.MESSAGE_RULE_REJECTED ->
+                builder.append("Would not forward. Would log FILTER REJECTED: message rule did not match.")
+            else -> builder.append("Would not forward or log: neither filter component matched.")
         }
 
         return TestOutcome(builder.toString(), if (wouldSend) Tone.POSITIVE else Tone.NEUTRAL)
@@ -185,9 +206,10 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
     // the live pipeline, which is easy to miss — surface it here so the user can fix it.
     fun saveWarning(): String? {
         val rules = _rules.value.filter { it.isNotBlank() }
-        val invalid = rules.filter { runCatching { Regex(it) }.isFailure }
-        if (invalid.isNotEmpty()) {
-            return "Saved, but ${invalid.size} rule(s) are not valid patterns and will be ignored."
+        val invalidSenderRules = _senders.value.count { !SenderMatcher.isValidRegex(it) }
+        val invalidMessageRules = rules.count { runCatching { Regex(it) }.isFailure }
+        if (invalidSenderRules > 0 || invalidMessageRules > 0) {
+            return "Saved, but $invalidSenderRules sender and $invalidMessageRules message pattern(s) are invalid and will be ignored."
         }
         return null
     }

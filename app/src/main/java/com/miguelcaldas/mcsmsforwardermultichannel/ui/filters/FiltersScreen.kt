@@ -14,16 +14,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,13 +34,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.R
+import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderRule
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,7 +49,6 @@ fun FiltersScreen(onBack: () -> Unit, viewModel: FiltersViewModel = viewModel())
     val senders by viewModel.senders.collectAsStateWithLifecycle()
     val rules by viewModel.rules.collectAsStateWithLifecycle()
     val template by viewModel.template.collectAsStateWithLifecycle()
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     // Seed the test inputs once: message from the last test (blank otherwise), sender from the
@@ -58,16 +57,15 @@ fun FiltersScreen(onBack: () -> Unit, viewModel: FiltersViewModel = viewModel())
     val initialTestMessage = remember { viewModel.lastTestMessage() }
 
     Scaffold(
-        modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
+        modifier = Modifier.fillMaxSize(),
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text("Filters") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(painterResource(R.drawable.ic_arrow_back_24), contentDescription = "Back")
                     }
                 },
-                scrollBehavior = scrollBehavior,
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -84,6 +82,9 @@ fun FiltersScreen(onBack: () -> Unit, viewModel: FiltersViewModel = viewModel())
                 senders = senders,
                 onUpdate = { index, value ->
                     viewModel.updateSender(index, value)
+                },
+                onRegexChange = { index, isRegex ->
+                    viewModel.setSenderRegex(index, isRegex)
                 },
                 onAdd = {
                     viewModel.addSender()
@@ -140,8 +141,9 @@ fun FiltersScreen(onBack: () -> Unit, viewModel: FiltersViewModel = viewModel())
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SendersCard(
-    senders: List<String>,
+    senders: List<SenderRule>,
     onUpdate: (Int, String) -> Unit,
+    onRegexChange: (Int, Boolean) -> Unit,
     onAdd: () -> Unit,
     onRemove: (Int) -> Unit,
 ) {
@@ -149,7 +151,7 @@ private fun SendersCard(
         Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Allowed senders", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Phone numbers (with country code, e.g. +35191XXXXXX) or sender IDs (e.g. AMAZON, MB WAY). Case is ignored for IDs, but accents must match the sender reported by Android.",
+                "Incoming sender text is lowercased and stripped of accents before matching. Write text rules lowercase and accent-free. A sender matches if any literal or full-string RegEx rule matches; phone-number literals use phone-aware comparison. With no sender rules, no sender matches.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             if (senders.isEmpty()) {
@@ -160,10 +162,10 @@ private fun SendersCard(
                 )
             } else {
                 senders.forEachIndexed { index, sender ->
-                    EntryRow(
-                        value = sender,
-                        label = "Sender",
+                    SenderEntryRow(
+                        rule = sender,
                         onValueChange = { onUpdate(index, it) },
+                        onRegexChange = { onRegexChange(index, it) },
                         onRemove = { onRemove(index) },
                     )
                 }
@@ -171,6 +173,40 @@ private fun SendersCard(
             Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) {
                 Text("Add sender")
             }
+        }
+    }
+}
+
+@Composable
+private fun SenderEntryRow(
+    rule: SenderRule,
+    onValueChange: (String) -> Unit,
+    onRegexChange: (Boolean) -> Unit,
+    onRemove: () -> Unit,
+) {
+    val invalidRegex = rule.isRegex && runCatching { Regex(rule.value) }.isFailure
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = rule.value,
+            onValueChange = onValueChange,
+            label = { Text(if (rule.isRegex) "Sender pattern" else "Sender") },
+            singleLine = true,
+            isError = invalidRegex,
+            supportingText = if (invalidRegex) {
+                { Text("Invalid regular expression") }
+            } else {
+                null
+            },
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        FilterChip(
+            selected = rule.isRegex,
+            onClick = { onRegexChange(!rule.isRegex) },
+            label = { Text("RegEx") },
+        )
+        IconButton(onClick = onRemove) {
+            Icon(painterResource(R.drawable.ic_close_24), contentDescription = "Remove")
         }
     }
 }
@@ -187,7 +223,7 @@ private fun RulesCard(
         Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Message format rules", style = MaterialTheme.typography.titleMedium)
             Text(
-                "The message body is lowercased and stripped of accents before regex matching. Write rules lowercase and accent-free. A message forwards if any rule matches; with no rules, nothing is forwarded.",
+                "Incoming message text is lowercased and stripped of accents before matching. Write RegEx rules lowercase and accent-free. A message matches if any RegEx rule matches. With no message rules, no message matches.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             if (rules.isEmpty()) {

@@ -25,9 +25,19 @@ echoing the passphrase.
 .PARAMETER Force
 Replaces an existing output bundle.
 
+.PARAMETER QrCodePath
+Optional PNG path for a locally generated QR code containing the encrypted import code. Requires
+Node.js/npm; the script runs the pinned qrcode 1.5.4 package locally and never sends bundle content
+to a QR service.
+
+.PARAMETER CopyImportCode
+Copies the encrypted import code to the local clipboard for the app's Paste import flow. Clipboard
+history and other local applications may retain it, so use this only when needed.
+
 .EXAMPLE
 pwsh .\tools\New-ProvisioningBundle.ps1 `
-    -OutputPath "$HOME\Downloads\mc-sms-forwarder.mcsmsconfig"
+    -OutputPath "$HOME\Downloads\mc-sms-forwarder.mcsmsconfig" `
+    -QrCodePath "$HOME\Downloads\mc-sms-forwarder-qr.png"
 #>
 
 [CmdletBinding()]
@@ -39,6 +49,10 @@ param(
     [string] $ConfigurationPath,
 
     [Security.SecureString] $Passphrase,
+
+    [string] $QrCodePath,
+
+    [switch] $CopyImportCode,
 
     [switch] $Force
 )
@@ -59,7 +73,9 @@ $minimumPassphraseLength = 12
 $maximumPassphraseLength = 1024
 $maximumListEntries = 1000
 $maximumBundleBytes = 128 * 1024
+$maximumQrImportCodeBytes = 2900
 $associatedData = [Text.Encoding]::UTF8.GetBytes("$formatName`:v$formatVersion")
+$importCodePrefix = "mcsmsconfig:v$formatVersion`:"
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 
 function Resolve-FullPath {
@@ -293,7 +309,11 @@ function Get-ValidatedStringArray {
         [switch] $IgnoreCaseForDuplicates
     )
 
-    $value = Get-PropertyValue $Object $Name
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        throw "Configuration is missing '$Name'."
+    }
+    $value = $property.Value
     if ($value -is [string] -or $value -isnot [Collections.IEnumerable]) {
         throw "Configuration value '$Name' must be an array."
     }
@@ -325,6 +345,65 @@ function Get-ValidatedStringArray {
         }
         if ($seen.Add($normalized)) {
             $validated.Add($normalized)
+        }
+    }
+    return $validated.ToArray()
+}
+
+function Get-ValidatedSenderRules {
+    param(
+        [Parameter(Mandatory)]
+        [object] $Object,
+
+        [Parameter(Mandatory)]
+        [string] $Name
+    )
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        throw "Configuration is missing '$Name'."
+    }
+    $value = $property.Value
+    if ($value -is [string] -or $value -isnot [Collections.IEnumerable]) {
+        throw "Configuration value '$Name' must be an array."
+    }
+
+    $validated = [Collections.Generic.List[object]]::new()
+    $sourceCount = 0
+    foreach ($item in $value) {
+        $sourceCount++
+        if ($sourceCount -gt $maximumListEntries) {
+            throw "Configuration value '$Name' cannot contain more than $maximumListEntries entries."
+        }
+
+        if ($item -is [pscustomobject]) {
+            Assert-OnlyProperties $item @("value", "regex") "sender rule"
+            $isRegex = Get-ValidatedBoolean $item "regex"
+            $rawValue = Get-ValidatedText $item "value" 256
+            $ruleValue = if ($isRegex) { $rawValue } else { $rawValue.Trim() }
+        } else {
+            throw "Configuration value '$Name' must contain only sender-rule objects."
+        }
+
+        if (
+            [string]::IsNullOrWhiteSpace($ruleValue) -or
+            $ruleValue.Length -gt 256 -or
+            $ruleValue.Contains("`r") -or
+            $ruleValue.Contains("`n")
+        ) {
+            throw "Configuration value '$Name' contains an invalid entry."
+        }
+
+        $duplicate = $validated | Where-Object {
+            $_.regex -eq $isRegex -and $_.value -ceq $ruleValue
+        } | Select-Object -First 1
+        if ($null -eq $duplicate) {
+            $validated.Add(
+                [pscustomobject][ordered]@{
+                    value = $ruleValue
+                    regex = $isRegex
+                }
+            )
         }
     }
     return $validated.ToArray()
@@ -395,7 +474,7 @@ function ConvertTo-ValidatedConfiguration {
         $filters = [ordered]@{}
         if ($null -ne $sourceFilters.PSObject.Properties["allowedSenders"]) {
             $filters.allowedSenders = @(
-                Get-ValidatedStringArray $sourceFilters "allowedSenders" 256 -TrimItems -IgnoreCaseForDuplicates
+                Get-ValidatedSenderRules $sourceFilters "allowedSenders"
             )
         }
         if ($null -ne $sourceFilters.PSObject.Properties["regexes"]) {
@@ -461,6 +540,37 @@ function Read-StringArray {
     return $values.ToArray()
 }
 
+function Read-SenderRules {
+    $rules = [Collections.Generic.List[object]]::new()
+    while ($rules.Count -lt $maximumListEntries) {
+        $value = Read-Host "Allowed sender rule, lowercase and accent-free (blank when finished)"
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            break
+        }
+        if ($value.Length -gt 256 -or $value.Contains("`r") -or $value.Contains("`n")) {
+            Write-Warning "Entry must contain at most 256 characters and no line breaks."
+            continue
+        }
+
+        $isRegex = Read-BooleanChoice "Interpret this sender rule as RegEx?" $false
+        $normalizedValue = if ($isRegex) { $value } else { $value.Trim() }
+        $duplicate = $rules | Where-Object {
+            $_.regex -eq $isRegex -and $_.value -ceq $normalizedValue
+        } | Select-Object -First 1
+        if ($null -ne $duplicate) {
+            Write-Warning "Duplicate sender rule ignored."
+            continue
+        }
+        $rules.Add(
+            [pscustomobject][ordered]@{
+                value = $normalizedValue
+                regex = $isRegex
+            }
+        )
+    }
+    return $rules.ToArray()
+}
+
 function Read-InteractiveConfiguration {
     $configuration = [ordered]@{}
 
@@ -495,7 +605,7 @@ function Read-InteractiveConfiguration {
     $filters = [ordered]@{}
     if (Read-BooleanChoice "Add allowed senders?" $true) {
         $filters.allowedSenders = @(
-            Read-StringArray "Allowed sender" 256 -TrimItems -IgnoreCaseForDuplicates
+            Read-SenderRules
         )
     }
     if (Read-BooleanChoice "Add message regex rules?" $true) {
@@ -549,6 +659,24 @@ if (!(Test-Path -LiteralPath $outputDirectory -PathType Container)) {
 }
 if ((Test-Path -LiteralPath $resolvedOutputPath) -and !$Force) {
     throw "Output file already exists. Use -Force to replace it."
+}
+
+$resolvedQrCodePath = $null
+if (![string]::IsNullOrWhiteSpace($QrCodePath)) {
+    $resolvedQrCodePath = Resolve-FullPath $QrCodePath
+    if (![IO.Path]::GetExtension($resolvedQrCodePath).Equals(".png", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "QrCodePath must use the .png extension."
+    }
+    if (Test-PathInsideRepository $resolvedQrCodePath) {
+        throw "Write provisioning QR codes outside the repository."
+    }
+    $qrDirectory = [IO.Path]::GetDirectoryName($resolvedQrCodePath)
+    if (!(Test-Path -LiteralPath $qrDirectory -PathType Container)) {
+        throw "QR output directory does not exist: $qrDirectory"
+    }
+    if ((Test-Path -LiteralPath $resolvedQrCodePath) -and !$Force) {
+        throw "QR output file already exists. Use -Force to replace it."
+    }
 }
 
 $configuration = if ([string]::IsNullOrWhiteSpace($ConfigurationPath)) {
@@ -637,3 +765,44 @@ try {
 }
 
 Write-Host "Encrypted provisioning bundle created at $resolvedOutputPath"
+
+$encodedEnvelope = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+$encodedEnvelope = $encodedEnvelope.TrimEnd("=").Replace("+", "-").Replace("/", "_")
+$importCode = "$importCodePrefix$encodedEnvelope"
+
+if (
+    $null -ne $resolvedQrCodePath -and
+    [Text.Encoding]::UTF8.GetByteCount($importCode) -gt $maximumQrImportCodeBytes
+) {
+    throw "Encrypted configuration is too large for one QR code. Use file or clipboard import."
+}
+
+if ($CopyImportCode) {
+    Set-Clipboard -Value $importCode
+    Write-Warning "Encrypted import code copied to the local clipboard. Keep its passphrase separate."
+}
+
+if ($null -ne $resolvedQrCodePath) {
+    $npx = Get-Command npx.cmd -ErrorAction SilentlyContinue
+    if ($null -eq $npx) {
+        $npx = Get-Command npx -ErrorAction SilentlyContinue
+    }
+    if ($null -eq $npx) {
+        throw "QR generation requires Node.js/npm (npx) on PATH."
+    }
+
+    $importCode | & $npx.Source --yes qrcode@1.5.4 `
+        --type png `
+        --error L `
+        --width 1200 `
+        --qzone 4 `
+        --output $resolvedQrCodePath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not generate the provisioning QR code."
+    }
+    Write-Host "Encrypted provisioning QR code created at $resolvedQrCodePath"
+}
+
+$importCode = $null
+$encodedEnvelope = $null
+$json = $null

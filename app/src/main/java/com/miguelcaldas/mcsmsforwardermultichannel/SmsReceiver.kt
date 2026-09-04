@@ -7,6 +7,7 @@ import android.provider.Telephony
 import android.telephony.PhoneNumberUtils
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardStatsStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
+import com.miguelcaldas.mcsmsforwardermultichannel.util.InboundFilterDecision
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
 import com.miguelcaldas.mcsmsforwardermultichannel.util.MasterSwitchStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
@@ -19,6 +20,7 @@ import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.TextNormalizer
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppCloudChannel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppConfig
+import com.miguelcaldas.mcsmsforwardermultichannel.util.decideInboundFilter
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -29,8 +31,7 @@ class SmsReceiver: BroadcastReceiver() {
         }
 
         val prefs = context.getSharedPreferences("mc_sms_fwd_wa", Context.MODE_PRIVATE)
-        // Master kill-switch: one prefs key checked before any work. Default ON so existing
-        // installs are unaffected.
+        // Master kill-switch: one prefs key checked before any work; fresh installs default ON.
         if (!MasterSwitchStore.load(prefs)) {
             return
         }
@@ -44,13 +45,7 @@ class SmsReceiver: BroadcastReceiver() {
         }
 
         val allowedSenders = SenderListStore.load(prefs)
-        if (allowedSenders.isEmpty()) {
-            return
-        }
         val patterns = RegexListStore.load(prefs)
-        if (patterns.isEmpty()) {
-            return
-        }
         val forwardTemplate = prefs.getString(ForwardTemplate.KEY, "").orEmpty()
 
         // The telephony framework reassembles concatenated SMS using the UDH (reference,
@@ -81,10 +76,6 @@ class SmsReceiver: BroadcastReceiver() {
             return
         }
 
-        if (!SenderMatcher.matches(allowedSenders, sender, countryIso)) {
-            return
-        }
-
         // Compile each pattern at most once per call; the previous form rebuilt Regex
         // objects inside `any { }` on every iteration. Patterns that fail to compile
         // are silently treated as non-matches — a single malformed entry never blocks
@@ -95,8 +86,26 @@ class SmsReceiver: BroadcastReceiver() {
         val bodyMatches = patterns.asSequence()
             .mapNotNull { runCatching { Regex(it) }.getOrNull() }
             .any { it.containsMatchIn(normalizedBody) }
-        if (!bodyMatches) {
-            return
+        val senderMatches = SenderMatcher.matches(allowedSenders, sender, countryIso)
+        when (decideInboundFilter(senderMatches, bodyMatches)) {
+            InboundFilterDecision.FORWARD -> Unit
+            InboundFilterDecision.SENDER_REJECTED -> {
+                LogUtils.addToLog(
+                    context,
+                    "${LogUtils.FILTER_REJECTED_PREFIX} \u2192 Sender did not match | " +
+                        "Raw from: $sender | Raw message: $fullBody",
+                )
+                return
+            }
+            InboundFilterDecision.MESSAGE_RULE_REJECTED -> {
+                LogUtils.addToLog(
+                    context,
+                    "${LogUtils.FILTER_REJECTED_PREFIX} \u2192 Message rule did not match | " +
+                        "Raw from: $sender | Raw message: $fullBody",
+                )
+                return
+            }
+            InboundFilterDecision.IGNORE -> return
         }
 
         val outgoingBody = if (forwardTemplate.isEmpty()) fullBody else ForwardTemplate.apply(forwardTemplate, sender, messages[0].timestampMillis, fullBody)

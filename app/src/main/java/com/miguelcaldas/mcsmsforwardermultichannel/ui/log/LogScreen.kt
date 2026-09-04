@@ -19,14 +19,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,7 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
@@ -46,8 +44,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.R
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogFailureDark
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogFailureLight
+import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogFilteredDark
+import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogFilteredLight
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogSuccessDark
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogSuccessLight
+import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -56,7 +57,6 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
     val filter by viewModel.filter.collectAsStateWithLifecycle()
     val logs by viewModel.logs.collectAsStateWithLifecycle()
     val clearState by viewModel.clearState.collectAsStateWithLifecycle()
-    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val dark = isSystemInDarkTheme()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -68,11 +68,10 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
     }
 
     Scaffold(
-        modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
+        modifier = Modifier.fillMaxSize(),
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text("Activity") },
-                scrollBehavior = scrollBehavior,
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -85,6 +84,11 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Text(
+                "Filter-rejected entries contain the full raw sender and message.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             FlowRow(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -93,6 +97,7 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
                 FilterChip(selected = filter == LogFilter.All, onClick = { viewModel.setFilter(LogFilter.All) }, label = { Text("All") })
                 FilterChip(selected = filter == LogFilter.SendOk, onClick = { viewModel.setFilter(LogFilter.SendOk) }, label = { Text("Send OK") })
                 FilterChip(selected = filter == LogFilter.SendFailed, onClick = { viewModel.setFilter(LogFilter.SendFailed) }, label = { Text("Failed") })
+                FilterChip(selected = filter == LogFilter.FilterRejected, onClick = { viewModel.setFilter(LogFilter.FilterRejected) }, label = { Text("Filter rejected") })
                 FilterChip(selected = filter == LogFilter.Boot, onClick = { viewModel.setFilter(LogFilter.Boot) }, label = { Text("Boot/Tile") })
             }
 
@@ -145,12 +150,14 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
 private fun buildLogText(logs: List<String>, dark: Boolean): AnnotatedString {
     val success: Color = if (dark) LogSuccessDark else LogSuccessLight
     val failure: Color = if (dark) LogFailureDark else LogFailureLight
+    val filtered: Color = if (dark) LogFilteredDark else LogFilteredLight
     return buildAnnotatedString {
         logs.forEach { entry ->
-            val color = when {
-                entry.contains("FAILED") -> failure
-                entry.contains("SEND OK") -> success
-                else -> Color.Unspecified
+            val color = when (classifyLogEntry(entry)) {
+                LogEntryType.FilterRejected -> filtered
+                LogEntryType.SendFailed -> failure
+                LogEntryType.SendOk -> success
+                LogEntryType.Boot, LogEntryType.Other -> Color.Unspecified
             }
             if (color == Color.Unspecified) {
                 append(entry)
