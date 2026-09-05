@@ -29,14 +29,18 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -51,17 +55,38 @@ import com.miguelcaldas.mcsmsforwardermultichannel.R
 import com.miguelcaldas.mcsmsforwardermultichannel.util.BuildMetadata
 import kotlinx.coroutines.launch
 
-private val REQUIRED_PERMISSIONS = arrayOf(
-    Manifest.permission.RECEIVE_SMS,
-    Manifest.permission.SEND_SMS,
-    Manifest.permission.POST_NOTIFICATIONS,
-)
+internal fun HealthAction.runtimePermission(): String? = when (this) {
+    HealthAction.GRANT_RECEIVE_SMS -> Manifest.permission.RECEIVE_SMS
+    HealthAction.GRANT_SEND_SMS -> Manifest.permission.SEND_SMS
+    HealthAction.GRANT_NOTIFICATIONS -> Manifest.permission.POST_NOTIFICATIONS
+    HealthAction.BATTERY_SETTINGS,
+    HealthAction.OPEN_CHANNELS,
+    HealthAction.OPEN_FILTERS,
+    -> null
+}
+
+internal fun permissionDeniedMessage(permission: String): String = when (permission) {
+    Manifest.permission.RECEIVE_SMS -> "SMS receiving permission was not granted."
+    Manifest.permission.SEND_SMS -> "SMS sending permission was not granted."
+    Manifest.permission.POST_NOTIFICATIONS -> "Notification permission was not granted."
+    else -> "Permission was not granted."
+}
 
 // Immediate forwarding is the app's core task-automation function and must remain available
 // when an SMS arrives while the device is in Doze. The system still requires user confirmation.
 @SuppressLint("BatteryLife")
 private fun requestBatteryOptimizationExemption(context: Context): Boolean {
     val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:${context.packageName}".toUri())
+    return try {
+        context.startActivity(intent)
+        true
+    } catch (_: ActivityNotFoundException) {
+        false
+    }
+}
+
+private fun openApplicationSettings(context: Context): Boolean {
+    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri())
     return try {
         context.startActivity(intent)
         true
@@ -79,16 +104,38 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
     val blockers by viewModel.blockers.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var pendingPermission by remember { mutableStateOf<String?>(null) }
 
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val permission = pendingPermission
+        pendingPermission = null
         viewModel.refresh()
+        if (!granted && permission != null) {
+            scope.launch {
+                val result = snackbarHostState.showSnackbar(
+                    message = permissionDeniedMessage(permission),
+                    actionLabel = "App settings",
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Indefinite,
+                )
+                if (
+                    result == SnackbarResult.ActionPerformed &&
+                    !openApplicationSettings(context)
+                ) {
+                    snackbarHostState.showSnackbar("App settings are unavailable.")
+                }
+            }
+        }
     }
 
     fun runHealthAction(action: HealthAction) {
+        val permission = action.runtimePermission()
+        if (permission != null) {
+            pendingPermission = permission
+            permissionLauncher.launch(permission)
+            return
+        }
         when (action) {
-            HealthAction.GRANT_PERMISSIONS -> {
-                permissionLauncher.launch(REQUIRED_PERMISSIONS)
-            }
             HealthAction.BATTERY_SETTINGS -> {
                 if (!requestBatteryOptimizationExemption(context)) {
                     scope.launch {
@@ -102,6 +149,10 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
             HealthAction.OPEN_FILTERS -> {
                 onOpenFilters()
             }
+            HealthAction.GRANT_RECEIVE_SMS,
+            HealthAction.GRANT_SEND_SMS,
+            HealthAction.GRANT_NOTIFICATIONS,
+            -> Unit
         }
     }
 

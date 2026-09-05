@@ -90,6 +90,12 @@ Needs the `SEND_SMS` permission. The only "credential" is the destination number
 `OnSharedPreferenceChangeListener`, so flipping the tile reactively updates the on-screen switch
 (no `onResume` re-sync needed).
 
+**Runtime permissions**: readiness rows use distinct `HealthAction` values for `RECEIVE_SMS`,
+`SEND_SMS`, and `POST_NOTIFICATIONS`. `StatusScreen` launches exactly one `RequestPermission`
+contract for the tapped row. A denied or suppressed result shows an indefinite snackbar with an
+**App settings** action, covering permanently denied permissions instead of failing silently.
+`SEND_SMS` is requested only while the SMS channel is enabled.
+
 **Build information**: the Status screen ends with a low-emphasis outlined About card. It reads
 `BuildConfig.VERSION_NAME`, the generated UTC build epoch, and the source revision through
 `BuildMetadata`. Release Actions captures one timestamp immediately before the Gradle

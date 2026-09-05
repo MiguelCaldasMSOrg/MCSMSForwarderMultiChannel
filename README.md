@@ -18,7 +18,7 @@ Each channel is independently toggleable; enable one, two, or all three at once.
 
 The UI is a single-activity Jetpack Compose app with a Material 3 bottom-navigation bar:
 
-- **Status** — a master forwarding switch plus a **readiness checklist** that surfaces only the blocking setup items (permissions, battery exemption, missing credentials) as actionable fix chips, a lifetime forwarding-stats card, and a subdued build-information card. The battery action opens Android's package-specific confirmation; the user grants the exemption once and the app checks its current status thereafter.
+- **Status** — a master forwarding switch plus a **readiness checklist** that surfaces only the blocking setup items (permissions, battery exemption, missing credentials) as actionable fix chips, a lifetime forwarding-stats card, and a subdued build-information card. Each permission action requests only the permission named by its row; if Android blocks or denies the dialog, the screen offers a persistent **App settings** fallback. The battery action opens Android's package-specific confirmation; the user grants the exemption once and the app checks its current status thereafter.
 - **Channels** — WhatsApp, Telegram, and SMS as cards (status + enable switch); tap one to open its detail form, or open **Senders, rules & template** for the shared filters.
 - **Activity** — the log uses neutral send attempts, green successes, red failures, and amber filter rejections, with filter chips for each category.
 

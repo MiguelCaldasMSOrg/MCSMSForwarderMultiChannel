@@ -25,7 +25,9 @@ import java.util.Date
 
 /** What a [HealthItem] should do when the user taps its "fix" action. */
 enum class HealthAction {
-    GRANT_PERMISSIONS,
+    GRANT_RECEIVE_SMS,
+    GRANT_SEND_SMS,
+    GRANT_NOTIFICATIONS,
     BATTERY_SETTINGS,
     OPEN_CHANNELS,
     OPEN_FILTERS,
@@ -33,6 +35,23 @@ enum class HealthAction {
 
 /** A single readiness check surfaced on the Status screen. */
 data class HealthItem(val label: String, val fixLabel: String, val action: HealthAction)
+
+internal fun permissionHealthItems(
+    receiveSmsGranted: Boolean,
+    notificationsGranted: Boolean,
+    smsEnabled: Boolean,
+    sendSmsGranted: Boolean,
+): List<HealthItem> = buildList {
+    if (!receiveSmsGranted) {
+        add(HealthItem("Grant SMS receiving", "Grant", HealthAction.GRANT_RECEIVE_SMS))
+    }
+    if (!notificationsGranted) {
+        add(HealthItem("Allow notifications", "Allow", HealthAction.GRANT_NOTIFICATIONS))
+    }
+    if (smsEnabled && !sendSmsGranted) {
+        add(HealthItem("Grant SMS sending", "Grant", HealthAction.GRANT_SEND_SMS))
+    }
+}
 
 /** Forward counter snapshot, pre-formatted for display. */
 data class StatsUi(val count: String, val first: String, val last: String)
@@ -111,8 +130,14 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        require(hasPermission(Manifest.permission.RECEIVE_SMS), "Grant SMS receiving", "Grant", HealthAction.GRANT_PERMISSIONS)
-        require(hasPermission(Manifest.permission.POST_NOTIFICATIONS), "Allow notifications", "Allow", HealthAction.GRANT_PERMISSIONS)
+        items.addAll(
+            permissionHealthItems(
+                receiveSmsGranted = hasPermission(Manifest.permission.RECEIVE_SMS),
+                notificationsGranted = hasPermission(Manifest.permission.POST_NOTIFICATIONS),
+                smsEnabled = smsConfig.enabled,
+                sendSmsGranted = hasPermission(Manifest.permission.SEND_SMS),
+            ),
+        )
         require(powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true, "Exempt from battery optimization", "Settings", HealthAction.BATTERY_SETTINGS)
         require(waConfig.enabled || tgConfig.enabled || smsConfig.enabled, "Enable at least one channel", "Channels", HealthAction.OPEN_CHANNELS)
 
@@ -126,7 +151,6 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
             require(tgConfig.chatId.isNotEmpty(), "Add Telegram chat ID", "Open", HealthAction.OPEN_CHANNELS)
         }
         if (smsConfig.enabled) {
-            require(hasPermission(Manifest.permission.SEND_SMS), "Grant SMS sending", "Grant", HealthAction.GRANT_PERMISSIONS)
             require(smsConfig.destination.isNotEmpty(), "Add SMS destination", "Open", HealthAction.OPEN_CHANNELS)
         }
         require(
