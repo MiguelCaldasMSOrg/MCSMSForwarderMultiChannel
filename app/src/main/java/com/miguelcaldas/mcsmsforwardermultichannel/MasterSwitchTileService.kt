@@ -32,7 +32,7 @@ class MasterSwitchTileService: TileService() {
         tile.label = getString(R.string.tile_label)
         tile.contentDescription = getString(if (enabled) R.string.tile_state_on else R.string.tile_state_off)
         tile.subtitle = getString(if (enabled) R.string.tile_state_on else R.string.tile_state_off)
-        tile.icon = Icon.createWithResource(this, R.drawable.ic_forward_24)
+        tile.icon = Icon.createWithResource(this, R.drawable.ic_stat_sms_forwarder)
         tile.updateTile()
     }
 }

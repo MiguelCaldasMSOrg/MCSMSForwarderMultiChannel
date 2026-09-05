@@ -73,8 +73,8 @@ jobs:
       - name: Capture build timestamp
         run: echo "BUILD_TIMESTAMP_EPOCH_MILLIS=$(date +%s%3N)" >> "$GITHUB_ENV"
 
-      - name: Run unit tests and assemble signed release APK
-        run: ./gradlew :app:testDebugUnitTest :app:assembleRelease --no-daemon
+      - name: Run unit tests, lint, and assemble signed release APK
+        run: ./gradlew :app:testDebugUnitTest :app:lint :app:assembleRelease --no-daemon
 
       - name: Verify APK signature and stage release assets
         run: |

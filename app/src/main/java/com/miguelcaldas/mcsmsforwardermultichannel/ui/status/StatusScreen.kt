@@ -8,6 +8,7 @@ import android.content.Intent
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -58,7 +60,6 @@ import kotlinx.coroutines.launch
 internal fun HealthAction.runtimePermission(): String? = when (this) {
     HealthAction.GRANT_RECEIVE_SMS -> Manifest.permission.RECEIVE_SMS
     HealthAction.GRANT_SEND_SMS -> Manifest.permission.SEND_SMS
-    HealthAction.GRANT_NOTIFICATIONS -> Manifest.permission.POST_NOTIFICATIONS
     HealthAction.BATTERY_SETTINGS,
     HealthAction.OPEN_CHANNELS,
     HealthAction.OPEN_FILTERS,
@@ -68,7 +69,6 @@ internal fun HealthAction.runtimePermission(): String? = when (this) {
 internal fun permissionDeniedMessage(permission: String): String = when (permission) {
     Manifest.permission.RECEIVE_SMS -> "SMS receiving permission was not granted."
     Manifest.permission.SEND_SMS -> "SMS sending permission was not granted."
-    Manifest.permission.POST_NOTIFICATIONS -> "Notification permission was not granted."
     else -> "Permission was not granted."
 }
 
@@ -151,7 +151,6 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
             }
             HealthAction.GRANT_RECEIVE_SMS,
             HealthAction.GRANT_SEND_SMS,
-            HealthAction.GRANT_NOTIFICATIONS,
             -> Unit
         }
     }
@@ -210,14 +209,25 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
 @Composable
 private fun BuildInfoCard() {
     OutlinedCard {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)) {
-            Text(BuildMetadata.title, style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                BuildMetadata.details,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Image(
+                painter = painterResource(R.drawable.ic_sms_forwarder),
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
             )
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(BuildMetadata.title, style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    BuildMetadata.details,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

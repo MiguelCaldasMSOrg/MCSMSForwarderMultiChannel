@@ -6,11 +6,13 @@
 .\gradlew.bat :app:assembleDebug          # build debug APK
 .\gradlew.bat :app:installDebug           # build + install on connected device/emulator
 .\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
+.\gradlew.bat :app:lint                    # run Android static/resource checks
 ```
 
-Focused JVM tests cover the concurrency/deadline helper and encrypted provisioning format,
-including PowerShell interoperability. No instrumentation suite is configured; use Gradle lint
-for Android static checks.
+Focused JVM tests cover filtering/normalization, sender rules, log classification, permission
+readiness, concurrency/deadline behavior, build metadata, and encrypted provisioning (including
+PowerShell interoperability). No instrumentation suite is configured; use Gradle lint for Android
+static checks.
 
 The build uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
 `targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00
@@ -18,6 +20,14 @@ The build uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 3
 Gradle's per-variant `GenerateBuildMetadataTask` generates `GeneratedBuildMetadata` at task
 execution; local builds use the current time and Git `HEAD` (`-dirty` when applicable), while
 `BUILD_TIMESTAMP_EPOCH_MILLIS`/`BUILD_SOURCE_REVISION` overrides support deterministic builds.
+
+**Icons**: launcher fallbacks are checked-in lossless WebP files in each `mipmap-*` density.
+Adaptive descriptors live in `mipmap-anydpi-v26`; Android 13+ descriptors in
+`mipmap-anydpi-v33` add `ic_launcher_monochrome` for themed icons. The About card uses the
+full-color density-specific `ic_sms_forwarder` drawable. The Quick Settings tile uses the
+alpha-only white `ic_stat_sms_forwarder` system glyph. Do not add the duplicate PNG launcher/UI
+exports, raster adaptive layers, or SVG masters to `res/`; update all checked-in density variants
+together and run lint plus a debug build after icon changes.
 
 ## Architecture
 
@@ -84,17 +94,30 @@ exception), mirroring how the HTTP channels treat 2xx — neither guarantees del
 dynamically-registered `BroadcastReceiver` (action `…SMS_SENT_RESULT`, `RECEIVER_NOT_EXPORTED`)
 logs the modem's asynchronous per-segment result (`SEND OK [SMS]`, `no service`, `radio off`, …).
 Needs the `SEND_SMS` permission. The only "credential" is the destination number; there is no token.
+The app does not choose a subscription ID, so multi-SIM devices use Android's configured default
+SMS subscription.
 
 **Master switch**: `MasterSwitchTileService` (Quick Settings tile) and the Status screen's Compose
 `Switch` both write the same `master_enabled` pref. `StatusViewModel` registers an
 `OnSharedPreferenceChangeListener`, so flipping the tile reactively updates the on-screen switch
-(no `onResume` re-sync needed).
+(no `onResume` re-sync needed). The service manifest entry and runtime tile state both use the
+branded, alpha-only `ic_stat_sms_forwarder` system glyph.
 
-**Runtime permissions**: readiness rows use distinct `HealthAction` values for `RECEIVE_SMS`,
-`SEND_SMS`, and `POST_NOTIFICATIONS`. `StatusScreen` launches exactly one `RequestPermission`
-contract for the tapped row. A denied or suppressed result shows an indefinite snackbar with an
-**App settings** action, covering permanently denied permissions instead of failing silently.
-`SEND_SMS` is requested only while the SMS channel is enabled.
+**Runtime permissions**: readiness rows use distinct `HealthAction` values for `RECEIVE_SMS` and
+`SEND_SMS`. `StatusScreen` launches exactly one `RequestPermission` contract for the tapped row.
+A denied or suppressed result shows an indefinite snackbar with an **App settings** action,
+covering permanently denied permissions instead of failing silently. `SEND_SMS` is requested only
+while the SMS channel is enabled. The app does not post notifications and therefore does not
+declare or request `POST_NOTIFICATIONS`.
+
+**SMS authorization constraints**: Android may group `RECEIVE_SMS` and `SEND_SMS` under one
+user-facing SMS category, but the app must check and request them independently. A user-fixed
+denial can return immediately without displaying a dialog; the snackbar's package-specific
+**App settings** action is the recovery path. Device-owner/work-profile/OEM policy can make the
+permission unavailable, and the app must not attempt to bypass it. Google Play separately treats
+SMS permissions as restricted: Play distribution requires a permissions declaration and approval
+for an eligible core use such as device automation. The GitHub-distributed APK is outside that
+review flow but still uses Android's normal runtime authorization.
 
 **Build information**: the Status screen ends with a low-emphasis outlined About card. It reads
 `BuildConfig.VERSION_NAME`, the generated UTC build epoch, and the source revision through

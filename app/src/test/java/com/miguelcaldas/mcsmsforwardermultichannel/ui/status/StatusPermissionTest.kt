@@ -12,7 +12,6 @@ class StatusPermissionTest {
     fun eachGrantActionMapsToExactlyOnePermission() {
         assertEquals(Manifest.permission.RECEIVE_SMS, HealthAction.GRANT_RECEIVE_SMS.runtimePermission())
         assertEquals(Manifest.permission.SEND_SMS, HealthAction.GRANT_SEND_SMS.runtimePermission())
-        assertEquals(Manifest.permission.POST_NOTIFICATIONS, HealthAction.GRANT_NOTIFICATIONS.runtimePermission())
         assertNull(HealthAction.BATTERY_SETTINGS.runtimePermission())
         assertNull(HealthAction.OPEN_CHANNELS.runtimePermission())
         assertNull(HealthAction.OPEN_FILTERS.runtimePermission())
@@ -22,13 +21,11 @@ class StatusPermissionTest {
     fun sendSmsPermissionIsRequiredOnlyForEnabledSmsChannel() {
         val disabled = permissionHealthItems(
             receiveSmsGranted = true,
-            notificationsGranted = true,
             smsEnabled = false,
             sendSmsGranted = false,
         )
         val enabled = permissionHealthItems(
             receiveSmsGranted = true,
-            notificationsGranted = true,
             smsEnabled = true,
             sendSmsGranted = false,
         )
@@ -41,7 +38,6 @@ class StatusPermissionTest {
     fun permissionCardsRemainIndependent() {
         val items = permissionHealthItems(
             receiveSmsGranted = false,
-            notificationsGranted = false,
             smsEnabled = true,
             sendSmsGranted = false,
         )
@@ -49,7 +45,6 @@ class StatusPermissionTest {
         assertEquals(
             listOf(
                 HealthAction.GRANT_RECEIVE_SMS,
-                HealthAction.GRANT_NOTIFICATIONS,
                 HealthAction.GRANT_SEND_SMS,
             ),
             items.map(HealthItem::action),

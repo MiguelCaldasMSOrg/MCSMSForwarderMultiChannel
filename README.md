@@ -62,10 +62,35 @@ The reception, filtering, normalization, multipart handling, and template logic 
 
 ## What is NOT included
 
+- No app-generated notifications or launcher badges. Forwarding outcomes remain in the **Activity**
+  screen, and the successful-message count remains in the **Status** screen.
 - No retry / backoff queue. HTTP sends start concurrently so one slow request does not queue or reject another. Each uses an 8.5-second receiver-facing completion deadline; the underlying connection has 8-second connect/read safeguards and may finish later, in which case delivery is reported as unknown. The SMS channel reports the modem result asynchronously in the log. None of the channels retries.
 - No webhook server for delivery receipts.
 - No media (image/audio/document) forwarding — text only.
 - **Loop guard is SMS-only.** A message arriving from the SMS forward destination is suppressed so an SMS→SMS echo cannot bounce indefinitely. WhatsApp and Telegram run on a different transport and cannot re-trigger the pipeline, so they need no guard.
+
+## SMS permissions and Android restrictions
+
+- `RECEIVE_SMS` and `SEND_SMS` are separate runtime permissions. Receiving is required for every
+  forwarding mode; sending is requested only after the SMS channel is enabled. The Status screen
+  requests one permission at a time even if Android displays both under a single **SMS** category.
+- If **Grant** returns without showing a system dialog, Android may have recorded a previous denial
+  or a permanently denied/user-fixed state. The Status screen then shows an **App settings** action;
+  open it and enable the relevant SMS permission under the app's Permissions page. Device-owner,
+  work-profile, parental-control, or OEM policy can disable that control entirely, and the App
+  cannot bypass such a restriction. See Android's
+  [runtime-permission guidance](https://developer.android.com/training/permissions/requesting).
+- Google Play treats SMS permissions as restricted. Publishing this App through Google Play would
+  require a permissions declaration and approval for an eligible core use, such as device
+  automation; approval is not automatic. The signed GitHub APK is distributed outside Google Play,
+  so that publication review does not apply, but Android's runtime permission prompts still do.
+  See Google's
+  [SMS and Call Log Permissions policy](https://support.google.com/googleplay/android-developer/answer/10208820).
+- The SMS channel does not select a SIM subscription. On multi-SIM devices, configure Android's
+  default SMS subscription before enabling the channel. A successful send means Android accepted
+  the message for modem dispatch; it is not a carrier delivery receipt. Later per-segment modem
+  results are recorded in **Activity**. See the Android
+  [`SmsManager` reference](https://developer.android.com/reference/android/telephony/SmsManager).
 
 ## Build & install
 
@@ -90,9 +115,16 @@ The command must return `True`. Android may also warn that the APK comes from ou
 .\gradlew.bat :app:assembleDebug          # build debug APK
 .\gradlew.bat :app:installDebug           # build + install on connected device/emulator
 .\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
+.\gradlew.bat :app:lint                    # run Android static/resource checks
 ```
 
 `compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), Navigation 2.10.0, and Google Code Scanner 16.1.0.
+
+Launcher artwork is checked in as density-specific lossless WebP fallbacks plus adaptive-icon
+descriptors under `mipmap-anydpi-v26`; Android 13+ uses the `mipmap-anydpi-v33` descriptors with
+the monochrome layer for themed icons. The full-color `ic_sms_forwarder` drawable appears in the
+About card, while the alpha-only `ic_stat_sms_forwarder` drawable is used for the Quick Settings
+tile. Builds package these resources directly; there is no icon-generation step.
 
 Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`). No keystore is committed.
 
@@ -112,7 +144,7 @@ GitHub's checked-out commit SHA.
 
 ### Publishing a release
 
-The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests, builds and verifies the signed APK, generates its SHA-256 checksum, and publishes both files as native GitHub Release assets. The stable links above automatically follow the latest release.
+The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests and Android lint, builds and verifies the signed APK, generates its SHA-256 checksum, and publishes both files as native GitHub Release assets. The stable links above automatically follow the latest release.
 
 Configure these encrypted repository secrets once under **Settings → Secrets and variables → Actions**:
 

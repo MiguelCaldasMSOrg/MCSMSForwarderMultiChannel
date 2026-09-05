@@ -17,8 +17,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Notifications (Android 13+) and battery optimisation exemption -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Battery optimisation exemption for immediate forwarding -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Wake the package on boot so the SMS receiver is ready before the first message -->
@@ -66,7 +65,7 @@
         <service
             android:name=".MasterSwitchTileService"
             android:exported="true"
-            android:icon="@drawable/ic_forward_24"
+            android:icon="@drawable/ic_stat_sms_forwarder"
             android:label="@string/tile_label"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>

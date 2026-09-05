@@ -27,7 +27,6 @@ import java.util.Date
 enum class HealthAction {
     GRANT_RECEIVE_SMS,
     GRANT_SEND_SMS,
-    GRANT_NOTIFICATIONS,
     BATTERY_SETTINGS,
     OPEN_CHANNELS,
     OPEN_FILTERS,
@@ -38,15 +37,11 @@ data class HealthItem(val label: String, val fixLabel: String, val action: Healt
 
 internal fun permissionHealthItems(
     receiveSmsGranted: Boolean,
-    notificationsGranted: Boolean,
     smsEnabled: Boolean,
     sendSmsGranted: Boolean,
 ): List<HealthItem> = buildList {
     if (!receiveSmsGranted) {
         add(HealthItem("Grant SMS receiving", "Grant", HealthAction.GRANT_RECEIVE_SMS))
-    }
-    if (!notificationsGranted) {
-        add(HealthItem("Allow notifications", "Allow", HealthAction.GRANT_NOTIFICATIONS))
     }
     if (smsEnabled && !sendSmsGranted) {
         add(HealthItem("Grant SMS sending", "Grant", HealthAction.GRANT_SEND_SMS))
@@ -133,7 +128,6 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
         items.addAll(
             permissionHealthItems(
                 receiveSmsGranted = hasPermission(Manifest.permission.RECEIVE_SMS),
-                notificationsGranted = hasPermission(Manifest.permission.POST_NOTIFICATIONS),
                 smsEnabled = smsConfig.enabled,
                 sendSmsGranted = hasPermission(Manifest.permission.SEND_SMS),
             ),
