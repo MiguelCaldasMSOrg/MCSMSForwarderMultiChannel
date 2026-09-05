@@ -16,7 +16,7 @@ static checks.
 
 The build uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
 `targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00
-(Material 3 follows the BOM), Navigation 2.10, and Google Code Scanner 16.1.
+(Material 3 follows the BOM), Navigation 2.10, Google Code Scanner 16.1, and ShortcutBadger 1.1.22.
 Gradle's per-variant `GenerateBuildMetadataTask` generates `GeneratedBuildMetadata` at task
 execution; local builds use the current time and Git `HEAD` (`-dirty` when applicable), while
 `BUILD_TIMESTAMP_EPOCH_MILLIS`/`BUILD_SOURCE_REVISION` overrides support deterministic builds.
@@ -51,9 +51,9 @@ optional `ForwardTemplate` (`%s`/`%t`/`%m` tokens) → `goAsync()` keeps the rec
 **fan out the same body to every operational channel** (`WhatsAppCloudChannel`, `TelegramChannel`,
 `SmsChannel`). A shared `AtomicInteger remaining` counts pending channel callbacks; each
 channel's `onComplete(success)` decrements it, and when it reaches zero the receiver records
-**exactly one** forward stat (if any channel succeeded) via `ForwardStatsStore.recordForward` and
-calls `pending.finish()`. The original (accented, cased) body is what gets forwarded —
-normalization is only for matching.
+**exactly one** forward stat (if any channel succeeded) via `ForwardStatsStore.recordForward`,
+increments the unseen launcher-badge count once, and calls `pending.finish()`. The original
+(accented, cased) body is what gets forwarded — normalization is only for matching.
 
 **Loop guard (SMS only).** A message arriving from the SMS forward destination is suppressed so an
 SMS→SMS echo cannot bounce indefinitely. WhatsApp and Telegram run on a different transport and
@@ -103,12 +103,13 @@ SMS subscription.
 (no `onResume` re-sync needed). The service manifest entry and runtime tile state both use the
 branded, alpha-only `ic_stat_sms_forwarder` system glyph.
 
-**Runtime permissions**: readiness rows use distinct `HealthAction` values for `RECEIVE_SMS` and
-`SEND_SMS`. `StatusScreen` launches exactly one `RequestPermission` contract for the tapped row.
-A denied or suppressed result shows an indefinite snackbar with an **App settings** action,
-covering permanently denied permissions instead of failing silently. `SEND_SMS` is requested only
-while the SMS channel is enabled. The app does not post notifications and therefore does not
-declare or request `POST_NOTIFICATIONS`.
+**Runtime permissions**: readiness rows use distinct `HealthAction` values for `RECEIVE_SMS`,
+`SEND_SMS`, and `POST_NOTIFICATIONS`. `StatusScreen` launches exactly one `RequestPermission`
+contract for the tapped row. A denied or suppressed result shows an indefinite snackbar with an
+**App settings** action, covering permanently denied permissions instead of failing silently.
+`SEND_SMS` is requested only while the SMS channel is enabled. `POST_NOTIFICATIONS` is a
+readiness requirement for launcher-badge compatibility even when a particular launcher backend
+does not use it.
 
 **SMS authorization constraints**: Android may group `RECEIVE_SMS` and `SEND_SMS` under one
 user-facing SMS category, but the app must check and request them independently. A user-fixed
@@ -132,9 +133,21 @@ scoped, documented `BatteryLife` suppression because immediate forwarding is cor
 behavior. It catches `ActivityNotFoundException` and returns `false`, allowing the Compose screen
 to show a snackbar; do not reintroduce `resolveActivity`, which triggers package-visibility lint.
 
-**Boot**: `BootReceiver` exists purely to make the framework load the package on
-`BOOT_COMPLETED` (no real work; just a log line) so the manifest SMS receiver is warm before the
-first message.
+**Boot**: `BootReceiver` makes the framework load the package on `BOOT_COMPLETED` so the manifest
+SMS receiver is warm before the first message. It also reapplies the persisted unseen-forward
+badge in case the launcher discarded it during reboot.
+
+**Launcher badge**: `ForwardStatsStore.recordForward` updates `fwd_unseen_count` at the same
+exactly-once point as the lifetime stat, then `LauncherBadge` applies that count through
+ShortcutBadger's vendor-specific providers/broadcasts. `MainActivity` uses `singleTop` and clears
+the unseen count only for a fresh `ACTION_MAIN` + `CATEGORY_LAUNCHER` invocation, handling both
+`onCreate` and `onNewIntent`; restored state and Recents do not clear it. The Status reset clears
+both lifetime stats and the unseen badge. Badge application is best effort and must never affect
+forwarding. A positive count that cannot be applied logs `BADGE UNAVAILABLE` once until the next
+launcher open. Microsoft Launcher has no confirmed standalone badge API; rely only on
+ShortcutBadger's normal launcher selection and accept that it may be unsupported. The app itself
+does not create forwarding-result or persistent count notifications. Do not add manufacturer
+detection around ShortcutBadger; rely on its launcher selection and accept a no-op when unsupported.
 
 **Persistence**: non-secret state uses a single `SharedPreferences` file named `mc_sms_fwd_wa`; the
 two channel tokens use the separate encrypted store described below. There is no database. Lists
@@ -152,6 +165,9 @@ AES/GCM using a key held by Android Keystore, then stores the ciphertext in the 
 `mc_sms_fwd_secure` preferences file. Configs read tokens by calling
 `SecureStore.read(context, …)`, so `WhatsAppConfig.load`/`TelegramConfig.load` take a `Context`
 (not a `SharedPreferences`).
+Lifetime forward-stat keys remain in the normal preferences file. The transient
+`fwd_unseen_count` lives separately in `mc_sms_fwd_badge`, which is excluded from cloud backup and
+device transfer so a badge is never restored onto another device.
 
 **Encrypted provisioning**: the Channels top-app-bar overflow menu can import a `.mcsmsconfig`
 bundle from Android's local/cloud document picker, Google Code Scanner QR scan, or pasted encrypted

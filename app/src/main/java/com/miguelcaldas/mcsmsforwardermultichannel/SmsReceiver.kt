@@ -125,10 +125,13 @@ class SmsReceiver: BroadcastReceiver() {
                 anySuccess.set(true)
             }
             if (remaining.decrementAndGet() == 0) {
-                if (anySuccess.get()) {
-                    ForwardStatsStore.recordForward(app)
+                try {
+                    if (anySuccess.get()) {
+                        ForwardStatsStore.recordForward(app)
+                    }
+                } finally {
+                    pending.finish()
                 }
-                pending.finish()
             }
         }
 

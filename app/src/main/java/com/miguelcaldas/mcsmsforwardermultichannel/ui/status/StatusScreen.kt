@@ -60,6 +60,7 @@ import kotlinx.coroutines.launch
 internal fun HealthAction.runtimePermission(): String? = when (this) {
     HealthAction.GRANT_RECEIVE_SMS -> Manifest.permission.RECEIVE_SMS
     HealthAction.GRANT_SEND_SMS -> Manifest.permission.SEND_SMS
+    HealthAction.GRANT_NOTIFICATIONS -> Manifest.permission.POST_NOTIFICATIONS
     HealthAction.BATTERY_SETTINGS,
     HealthAction.OPEN_CHANNELS,
     HealthAction.OPEN_FILTERS,
@@ -69,6 +70,7 @@ internal fun HealthAction.runtimePermission(): String? = when (this) {
 internal fun permissionDeniedMessage(permission: String): String = when (permission) {
     Manifest.permission.RECEIVE_SMS -> "SMS receiving permission was not granted."
     Manifest.permission.SEND_SMS -> "SMS sending permission was not granted."
+    Manifest.permission.POST_NOTIFICATIONS -> "Notification permission was not granted; some launcher badges may not work."
     else -> "Permission was not granted."
 }
 
@@ -151,6 +153,7 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
             }
             HealthAction.GRANT_RECEIVE_SMS,
             HealthAction.GRANT_SEND_SMS,
+            HealthAction.GRANT_NOTIFICATIONS,
             -> Unit
         }
     }

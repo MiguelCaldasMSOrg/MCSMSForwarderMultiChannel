@@ -62,8 +62,8 @@ The reception, filtering, normalization, multipart handling, and template logic 
 
 ## What is NOT included
 
-- No app-generated notifications or launcher badges. Forwarding outcomes remain in the **Activity**
-  screen, and the successful-message count remains in the **Status** screen.
+- No forwarding-result or persistent count notifications. Forwarding outcomes remain in the
+  **Activity** screen, and the lifetime successful-message count remains in the **Status** screen.
 - No retry / backoff queue. HTTP sends start concurrently so one slow request does not queue or reject another. Each uses an 8.5-second receiver-facing completion deadline; the underlying connection has 8-second connect/read safeguards and may finish later, in which case delivery is reported as unknown. The SMS channel reports the modem result asynchronously in the log. None of the channels retries.
 - No webhook server for delivery receipts.
 - No media (image/audio/document) forwarding — text only.
@@ -92,6 +92,29 @@ The reception, filtering, normalization, multipart handling, and template logic 
   results are recorded in **Activity**. See the Android
   [`SmsManager` reference](https://developer.android.com/reference/android/telephony/SmsManager).
 
+## Launcher badge
+
+After an incoming SMS is successfully forwarded through at least one configured channel, the App
+increments a separate launcher-badge count exactly once for that message. This badge is the number
+of successful incoming-message forwards **since the last time the App was opened from its launcher
+icon**; tapping the icon clears it. Activity recreation and returning through Android's Recents
+screen do not clear the count. The lifetime count shown on the Status screen is independent.
+
+The badge is implemented through
+[ShortcutBadger 1.1.22](https://github.com/leolin310148/ShortcutBadger) (Apache-2.0), which uses
+launcher/OEM-specific mechanisms. The App declares and requests `POST_NOTIFICATIONS` as a general
+launcher-badge prerequisite even though some compatible backends do not use it. The App does not
+post notifications for the badge: sound, vibration, heads-up banners, status-bar icons, and
+notification-shade entries are all absent by default. Unsupported launchers simply show no badge
+and forwarding continues normally; the Activity log records `BADGE UNAVAILABLE` the first time an
+unseen count cannot be applied after a launcher open.
+
+Microsoft Launcher can display numeric badges, but its normal cross-device mechanism derives them
+from active notifications and it has no confirmed independent Microsoft badge API. The
+notification-free counter therefore relies on ShortcutBadger's normal launcher detection and may
+be unavailable in Microsoft Launcher. Stock Android/Pixel Launcher also does not expose an
+independent numeric badge API.
+
 ## Build & install
 
 Download the latest signed release directly from GitHub or from the [project website](https://miguelcaldasmsorg.github.io/MCSMSForwarderMultiChannel/):
@@ -118,7 +141,8 @@ The command must return `True`. Android may also warn that the APK comes from ou
 .\gradlew.bat :app:lint                    # run Android static/resource checks
 ```
 
-`compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), Navigation 2.10.0, and Google Code Scanner 16.1.0.
+`compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), Navigation 2.10.0, Google Code Scanner 16.1.0, and ShortcutBadger 1.1.22.
+The APK bundles ShortcutBadger's Apache-2.0 license under `assets/third-party`.
 
 Launcher artwork is checked in as density-specific lossless WebP fallbacks plus adaptive-icon
 descriptors under `mipmap-anydpi-v26`; Android 13+ uses the `mipmap-anydpi-v33` descriptors with

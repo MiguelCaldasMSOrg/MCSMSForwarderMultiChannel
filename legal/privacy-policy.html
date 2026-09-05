@@ -18,7 +18,7 @@
 </head>
 <body>
     <h1>Privacy Policy</h1>
-    <p class="updated">MC SMS Forwarder (Multi-Channel) &middot; Last updated: 4 September 2026</p>
+    <p class="updated">MC SMS Forwarder (Multi-Channel) &middot; Last updated: 5 September 2026</p>
 
     <p>This Privacy Policy explains how the <strong>MC SMS Forwarder (Multi-Channel)</strong> application (the &ldquo;App&rdquo;) handles information. The App is a personal utility that forwards incoming SMS messages from the device on which it is installed to one or more destinations chosen by the device owner (the WhatsApp Cloud API, Telegram, and/or another phone number via SMS).</p>
 
@@ -32,6 +32,7 @@
         <li><strong>Credentials.</strong> The WhatsApp Cloud API access token and the Telegram bot token are stored encrypted at rest on the device and are used only to authenticate requests to those services. They are never displayed back in the interface and are never written to logs.</li>
         <li><strong>Optional QR scanning.</strong> When you choose QR import, Google Play services provides the scanner and processes the camera image on-device. The App does not request camera permission, receive the camera image, or retain it; it receives only the decoded encrypted provisioning text.</li>
         <li><strong>Local activity log.</strong> The App keeps an on-device troubleshooting log containing timestamps, send outcomes, destination identifiers, and message content. When exactly one of the sender and message-rule checks succeeds, the log records the full raw sender and message and identifies the failed check, even though that message is not forwarded. Loop-guard entries may also contain the sender number. Logs are pruned automatically and never contain channel credentials. You can explicitly share the currently displayed log with another app using the Share action.</li>
+        <li><strong>Forwarding statistics and launcher badge.</strong> The App stores lifetime forwarding counts and timestamps plus a separate count of messages successfully forwarded since the App was last opened from its launcher icon. On compatible devices, only that numeric unseen count is sent locally to the installed launcher or the device manufacturer's badge mechanism. The App requests notification permission as a general prerequisite for launcher-badge compatibility, although a particular launcher may not use it. Badge updates do not create sound, vibration, banners, status-bar icons, or notification-shade entries. No sender, recipient, credential, or message content is included.</li>
     </ul>
 
     <h2>How information is used</h2>
@@ -39,7 +40,7 @@
 
     <h2>Where data is stored and who receives it</h2>
     <ul>
-        <li>Configuration, encrypted credentials, and logs are stored in the App's private data on your device. Depending on your Android settings, Android may copy non-secret configuration and logs to a cloud backup or another device. The encrypted credential preferences are explicitly excluded from Android cloud backup and device transfer because their Android Keystore key cannot be transferred. We do not operate any server that collects or stores your data.</li>
+        <li>Configuration, forwarding statistics, launcher-badge state, encrypted credentials, and logs are stored in the App's private data on your device. Depending on your Android settings, Android may copy non-secret configuration, lifetime statistics, and logs to a cloud backup or another device. The encrypted credential preferences and transient launcher-badge state are explicitly excluded from Android cloud backup and device transfer. We do not operate any server that collects or stores your data.</li>
         <li>When a message matches your rules, its content is transmitted to the destination services <strong>you</strong> selected:
             <ul>
                 <li><strong>WhatsApp Cloud API</strong> (operated by Meta Platforms, Inc.) — subject to Meta&rsquo;s privacy terms.</li>
@@ -48,10 +49,11 @@
             </ul>
         </li>
         <li>Optional QR scanning is supplied by Google Play services and occurs on-device. We do not sell, rent, or otherwise share your data with any other third party.</li>
+        <li>If your launcher supports notification-free numeric badges, the App sends the current unseen-forward count to that launcher or to an on-device manufacturer badge provider. This is local inter-app communication and contains only an integer.</li>
     </ul>
 
     <h2>Data retention</h2>
-    <p>Configuration and credentials persist on the device until you change them or uninstall the App. The on-device activity log is pruned automatically after approximately 35 days or once it reaches 2,000 entries. Uninstalling the App removes its data from that device. Non-secret configuration and logs may remain in an Android-managed backup according to your Android settings; encrypted channel credentials are excluded from that backup.</p>
+    <p>Configuration, credentials, and lifetime forwarding statistics persist on the device until you change or reset them or uninstall the App. The launcher-badge count is cleared whenever you open the App from its launcher icon and is excluded from Android cloud backup and device transfer. The on-device activity log is pruned automatically after approximately 35 days or once it reaches 2,000 entries. Uninstalling the App removes its data from that device. Non-secret configuration, lifetime statistics, and logs may remain in an Android-managed backup according to your Android settings; encrypted channel credentials are excluded from that backup.</p>
 
     <h2>Security</h2>
     <p>Credentials are stored using the device&rsquo;s encrypted storage. Network requests to the WhatsApp Cloud API and the Telegram Bot API are made over HTTPS. Because the App runs entirely on your device, the security of that data also depends on the security of your device.</p>

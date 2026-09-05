@@ -19,6 +19,7 @@ navigationCompose = "2.10.0"
 junit = "4.13.2"
 orgJson = "20260814"
 playServicesCodeScanner = "16.1.0"
+shortcutBadger = "1.1.22"
 
 [libraries]
 androidx-core = { group = "androidx.core", name = "core", version.ref = "androidxCore" }
@@ -36,6 +37,7 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 play-services-code-scanner = { group = "com.google.android.gms", name = "play-services-code-scanner", version.ref = "playServicesCodeScanner" }
+shortcut-badger = { group = "me.leolin", name = "ShortcutBadger", version.ref = "shortcutBadger" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
