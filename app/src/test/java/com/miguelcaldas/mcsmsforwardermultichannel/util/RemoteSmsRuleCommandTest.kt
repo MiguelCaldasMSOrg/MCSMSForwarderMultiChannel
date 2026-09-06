@@ -1,14 +1,14 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.util
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Base64
 
 class RemoteSmsRuleCommandTest {
-    private val key = "000102030405060708090a0b0c0d0e0f" +
-        "101112131415161718191a1b1c1d1e1f"
+    private val key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
     @Test
     fun parsesEachAuthenticatedCommandType() {
@@ -60,7 +60,7 @@ class RemoteSmsRuleCommandTest {
         )
         assertEquals(
             RemoteSmsRuleParseResult.Rejected,
-            RemoteSmsRuleCommands.parse("${RemoteSmsRuleType.LITERAL_SENDER.token}:bad=:${"0".repeat(64)}", key),
+            RemoteSmsRuleCommands.parse("${RemoteSmsRuleType.LITERAL_SENDER.token}:bad=:${"A".repeat(43)}", key),
         )
         assertEquals(
             RemoteSmsRuleParseResult.Rejected,
@@ -74,7 +74,7 @@ class RemoteSmsRuleCommandTest {
         val paddedPayload = Base64.getUrlEncoder()
             .encodeToString("send".toByteArray(Charsets.UTF_8))
         val paddedContent = "${type.token}:$paddedPayload"
-        val paddedCommand = "$paddedContent:${RemoteSmsRuleCommands.hmacHex(key, paddedContent)}"
+        val paddedCommand = "$paddedContent:${RemoteSmsRuleCommands.hmacBase64Url(key, paddedContent)}"
         val valid = command(type, "sender")
 
         assertEquals(
@@ -83,11 +83,11 @@ class RemoteSmsRuleCommandTest {
         )
         assertEquals(
             RemoteSmsRuleParseResult.Rejected,
-            RemoteSmsRuleCommands.parse(valid.dropLast(64) + valid.takeLast(64).uppercase(), key),
+            RemoteSmsRuleCommands.parse("$valid=", key),
         )
         assertEquals(
             RemoteSmsRuleParseResult.Rejected,
-            RemoteSmsRuleCommands.parse(valid, "abcd"),
+            RemoteSmsRuleCommands.parse(valid, "$key="),
         )
 
         val invalidUtf8Payload = Base64.getUrlEncoder()
@@ -95,7 +95,7 @@ class RemoteSmsRuleCommandTest {
             .encodeToString(byteArrayOf(0xc0.toByte()))
         val invalidUtf8Content = "${type.token}:$invalidUtf8Payload"
         val invalidUtf8Command =
-            "$invalidUtf8Content:${RemoteSmsRuleCommands.hmacHex(key, invalidUtf8Content)}"
+            "$invalidUtf8Content:${RemoteSmsRuleCommands.hmacBase64Url(key, invalidUtf8Content)}"
         assertEquals(
             RemoteSmsRuleParseResult.Rejected,
             RemoteSmsRuleCommands.parse(invalidUtf8Command, key),
@@ -126,16 +126,28 @@ class RemoteSmsRuleCommandTest {
             RemoteSmsRuleParseResult.NotCommand,
             RemoteSmsRuleCommands.parse("normal message", key),
         )
-        assertTrue(RemoteSmsRuleCommands.isReserved("MCSMSSL:sender:mac"))
+        RemoteSmsRuleType.entries.forEach { type ->
+            assertTrue(RemoteSmsRuleCommands.isReserved(type.token))
+            assertTrue(RemoteSmsRuleCommands.isReserved("${type.token}:sender:mac"))
+            assertTrue(RemoteSmsRuleCommands.isReserved("${type.token} malformed"))
+            assertEquals(
+                RemoteSmsRuleParseResult.Rejected,
+                RemoteSmsRuleCommands.parse("${type.token} malformed", key),
+            )
+        }
         assertTrue(!RemoteSmsRuleCommands.isReserved("MCSMS:sender:mac"))
     }
 
     @Test
     fun validatesAndNormalizesHmacKeys() {
-        assertTrue(isValidRemoteSmsHmacKey(key.uppercase()))
-        assertEquals(key, normalizeRemoteSmsHmacKey("  ${key.uppercase()}  "))
+        val caseChangedKey = key.uppercase()
+
+        assertTrue(isValidRemoteSmsHmacKey(key))
+        assertTrue(isValidRemoteSmsHmacKey(caseChangedKey))
+        assertNotEquals(key, caseChangedKey)
+        assertEquals(key, normalizeRemoteSmsHmacKey("  $key  "))
         assertTrue(!isValidRemoteSmsHmacKey("abcd"))
-        assertEquals(64, RemoteSmsRulesConfig.HMAC_KEY_MASK.length)
+        assertEquals(43, RemoteSmsRulesConfig.HMAC_KEY_MASK.length)
     }
 
     @Test
@@ -205,7 +217,7 @@ class RemoteSmsRuleCommandTest {
     @Test
     fun parsesPowerShellGeneratedCommand() {
         val command = "MCSMSMR:b3RwXHMrXGR7Nn0:" +
-            "81dba3bc6d1eb26b601d34463f35a60845638dccd771e947f91707a987f0425d"
+            "gdujvG0esmtgHTRGPzWmCEVjjczXcelH-RcHqYfwQl0"
 
         assertEquals(
             RemoteSmsRuleParseResult.Accepted(
@@ -223,6 +235,6 @@ class RemoteSmsRuleCommandTest {
             .withoutPadding()
             .encodeToString(value.toByteArray(Charsets.UTF_8))
         val content = "${type.token}:$payload"
-        return "$content:${RemoteSmsRuleCommands.hmacHex(key, content)}"
+        return "$content:${RemoteSmsRuleCommands.hmacBase64Url(key, content)}"
     }
 }

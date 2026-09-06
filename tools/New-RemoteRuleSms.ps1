@@ -5,9 +5,9 @@
 Generates a remote-rule HMAC key or one authenticated MC SMS Forwarder command SMS.
 
 .DESCRIPTION
-Generate Key mode creates a random 256-bit lowercase hexadecimal key. Build SMS mode accepts one
+Generate Key mode creates a random 256-bit unpadded Base64URL key. Build SMS mode accepts one
 cleartext literal sender, sender RegEx, or message RegEx, encodes it as unpadded Base64URL, and
-appends a lowercase HMAC-SHA256 over TOKEN:PAYLOAD. Output is always written to the terminal;
+appends the HMAC-SHA256 tag in the same encoding. Output is always written to the terminal;
 -Copy and -OutputPath optionally duplicate it to the clipboard and/or a UTF-8 file.
 
 .EXAMPLE
@@ -104,12 +104,50 @@ function Get-NormalizedHmacKey {
     } else {
         ConvertFrom-ProtectedValue $HmacKey
     }
-    $normalized = $keyText.Trim().ToLowerInvariant()
+    $normalized = $keyText.Trim()
     $keyText = $null
-    if ($normalized -notmatch '^[0-9a-f]{64}$') {
-        throw "HmacKey must contain exactly 64 hexadecimal characters."
+    if ($normalized -notmatch '^[A-Za-z0-9_-]{43}$') {
+        throw "HmacKey must be a canonical 43-character unpadded Base64URL key."
+    }
+    $decoded = ConvertFrom-Base64Url $normalized
+    try {
+        if ($decoded.Length -ne 32 -or (ConvertTo-Base64Url $decoded) -cne $normalized) {
+            throw "HmacKey must be a canonical 43-character unpadded Base64URL key."
+        }
+    } finally {
+        [Array]::Clear($decoded, 0, $decoded.Length)
     }
     return $normalized
+}
+
+function ConvertTo-Base64Url {
+    param(
+        [Parameter(Mandatory)]
+        [byte[]] $Bytes
+    )
+
+    return [Convert]::ToBase64String($Bytes).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+}
+
+function ConvertFrom-Base64Url {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Value
+    )
+
+    if ($Value -notmatch '^[A-Za-z0-9_-]+$' -or $Value.Length % 4 -eq 1) {
+        throw "Value is not canonical unpadded Base64URL."
+    }
+    $padded = $Value.Replace("-", "+").Replace("_", "/")
+    switch ($padded.Length % 4) {
+        2 { $padded += "==" }
+        3 { $padded += "=" }
+    }
+    try {
+        return [Convert]::FromBase64String($padded)
+    } catch {
+        throw "Value is not canonical unpadded Base64URL."
+    }
 }
 
 function Write-GeneratedOutput {
@@ -151,10 +189,12 @@ function Write-GeneratedOutput {
 
 if ($PSCmdlet.ParameterSetName -eq "GenerateKey") {
     $keyBytes = [byte[]]::new(32)
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
     try {
-        [Security.Cryptography.RandomNumberGenerator]::Fill($keyBytes)
-        Write-GeneratedOutput ([Convert]::ToHexString($keyBytes).ToLowerInvariant())
+        $rng.GetBytes($keyBytes)
+        Write-GeneratedOutput (ConvertTo-Base64Url $keyBytes)
     } finally {
+        $rng.Dispose()
         [Array]::Clear($keyBytes, 0, $keyBytes.Length)
     }
     return
@@ -178,16 +218,14 @@ $token = switch ($PSCmdlet.ParameterSetName) {
 }
 
 $keyText = Get-NormalizedHmacKey
-$keyBytes = [Convert]::FromHexString($keyText)
+$keyBytes = ConvertFrom-Base64Url $keyText
 $valueBytes = [Text.Encoding]::UTF8.GetBytes($Value)
 $payload = [Convert]::ToBase64String($valueBytes).TrimEnd("=").Replace("+", "-").Replace("/", "_")
 $authenticatedText = "$token`:$payload"
 $authenticatedBytes = [Text.Encoding]::UTF8.GetBytes($authenticatedText)
 $hmac = [Security.Cryptography.HMACSHA256]::new($keyBytes)
 try {
-    $mac = [Convert]::ToHexString(
-        $hmac.ComputeHash($authenticatedBytes)
-    ).ToLowerInvariant()
+    $mac = ConvertTo-Base64Url ($hmac.ComputeHash($authenticatedBytes))
     Write-GeneratedOutput "$authenticatedText`:$mac"
 } finally {
     $hmac.Dispose()

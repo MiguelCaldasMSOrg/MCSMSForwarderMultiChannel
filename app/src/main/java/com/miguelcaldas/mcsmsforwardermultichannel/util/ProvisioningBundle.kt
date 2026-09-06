@@ -196,8 +196,13 @@ internal object ProvisioningBundle {
         }
     }
 
+    fun save(context: Context, configuration: ProvisionedConfiguration): String =
+        FilterRuleMutationCoordinator.withLock {
+            saveLocked(context, configuration)
+        }
+
     @SuppressLint("UseKtx")
-    fun save(context: Context, configuration: ProvisionedConfiguration): String {
+    private fun saveLocked(context: Context, configuration: ProvisionedConfiguration): String {
         val prefs = context.getSharedPreferences(WhatsAppConfig.PREFS_NAME, Context.MODE_PRIVATE)
         val secretUpdates = buildMap {
             configuration.whatsApp?.let {
@@ -505,11 +510,15 @@ internal object ProvisioningBundle {
         val remoteSmsRules = optionalObject(payload, "remoteSmsRules")?.let {
             requireOnlyKeys(it, "remoteSmsRules", setOf("enabled", "hmacKey"))
             val hmacKey = normalizeRemoteSmsHmacKey(
-                requiredString(it, "hmacKey", RemoteSmsRulesConfig.HMAC_KEY_HEX_LENGTH),
+                requiredString(
+                    it,
+                    "hmacKey",
+                    RemoteSmsRulesConfig.HMAC_KEY_BASE64URL_LENGTH,
+                ),
             )
             if (!isValidRemoteSmsHmacKey(hmacKey)) {
                 throw ProvisioningException(
-                    "Configuration value 'hmacKey' must contain exactly 64 hexadecimal characters.",
+                    "Configuration value 'hmacKey' must be a canonical 43-character unpadded Base64URL key.",
                 )
             }
             ProvisionedRemoteSmsRules(
@@ -712,33 +721,4 @@ internal object ProvisioningBundle {
         return decoded
     }
 
-    private data class PreferenceSnapshot(private val values: Map<String, Any?>) {
-        @SuppressLint("UseKtx")
-        fun restore(prefs: android.content.SharedPreferences) {
-            val editor = prefs.edit()
-            values.forEach { (key, value) ->
-                when (value) {
-                    null -> editor.remove(key)
-                    is Boolean -> editor.putBoolean(key, value)
-                    is String -> editor.putString(key, value)
-                    else -> error("Unsupported preference value")
-                }
-            }
-            check(editor.commit()) { "Could not restore imported configuration" }
-        }
-
-        companion object {
-            fun capture(
-                prefs: android.content.SharedPreferences,
-                keys: Set<String>,
-            ): PreferenceSnapshot {
-                val storedValues = prefs.all
-                return PreferenceSnapshot(
-                    keys.associateWith { key ->
-                        if (prefs.contains(key)) storedValues[key] else null
-                    },
-                )
-            }
-        }
-    }
 }

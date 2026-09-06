@@ -72,13 +72,24 @@ write-only and stored through Android Keystore-backed `SecureStore`.
 Commands are one line:
 
 ```text
-MCSMSSL:<unpadded-base64url-sender>:<64-lowercase-hex-hmac>
-MCSMSSR:<unpadded-base64url-sender-regex>:<64-lowercase-hex-hmac>
-MCSMSMR:<unpadded-base64url-message-regex>:<64-lowercase-hex-hmac>
+MCSMSSL:<unpadded-base64url-sender>:<unpadded-base64url-hmac>
+MCSMSSR:<unpadded-base64url-sender-regex>:<unpadded-base64url-hmac>
+MCSMSMR:<unpadded-base64url-message-regex>:<unpadded-base64url-hmac>
 ```
 
-The HMAC-SHA256 covers exactly `TOKEN:PAYLOAD`. Base64URL prevents delimiters inside sender and
-RegEx values but provides no confidentiality: the value remains trivially decodable from the SMS.
+Any SMS beginning with one of those reserved token prefixes is removed from the ordinary
+forwarding pipeline. Incorrect separators or other malformed syntax are rejected rather than
+being forwarded or written to a raw filter-rejection log.
+
+The 256-bit shared key and 256-bit HMAC-SHA256 tag are both canonical unpadded Base64URL values
+(43 characters each). The HMAC covers exactly `TOKEN:PAYLOAD`. Base64URL prevents delimiters inside
+sender and RegEx values but provides no confidentiality: the value remains trivially decodable
+from the SMS.
+
+> **v1.0.13 upgrade note:** regenerate and replace any hexadecimal remote-SMS key created with
+> v1.0.13. Version 1.0.14 accepts only the canonical Base64URL format and does not migrate legacy
+> keys or commands.
+
 Added rules use the same matching conventions as manual rules: textual sender values and RegExes
 should be written lowercase and accent-free.
 There is deliberately no timestamp, sequence, command ID, replay protection, or sender-number
@@ -338,7 +349,7 @@ For non-interactive input, pass `-ConfigurationPath` with a JSON file using this
   },
   "remoteSmsRules": {
     "enabled": true,
-    "hmacKey": "<64-hex-character-hmac-key>"
+    "hmacKey": "<43-character-unpadded-base64url-key>"
   },
   "filters": {
     "allowedSenders": [
@@ -362,10 +373,11 @@ For non-interactive input, pass `-ConfigurationPath` with a JSON file using this
 
 Every top-level section and every field inside `filters` is optional. If a channel section is
 included, all of its displayed fields are required and credentials must be nonblank. If
-`remoteSmsRules` is included, both fields are required and `hmacKey` must be exactly 64 hexadecimal
-characters. Runtime permissions, the battery-optimization exemption, activity logs, forwarding
-statistics, and remembered dry-run test inputs are device/runtime state and are intentionally not
-provisioned. Every `allowedSenders` entry must explicitly provide both `value` and `regex`.
+`remoteSmsRules` is included, both fields are required and `hmacKey` must be a canonical
+43-character unpadded Base64URL value. Runtime permissions, the battery-optimization exemption,
+activity logs, forwarding statistics, and remembered dry-run test inputs are device/runtime state
+and are intentionally not provisioned. Every `allowedSenders` entry must explicitly provide both
+`value` and `regex`.
 
 Keep that plaintext file outside every Git checkout and delete it securely when it is no longer
 needed. Treat the encrypted bundle as sensitive too, use a strong unique passphrase, keep it
@@ -494,8 +506,8 @@ documented `BatteryLife` lint suppression because immediate forwarding is core t
 behavior. If a device has no activity for the platform action, the screen reports that through a
 snackbar instead of silently doing nothing.
 
-**Pipeline** (`SmsReceiver`): incoming SMS → reassemble multipart → intercept exact reserved
-remote-rule tokens before every forwarding gate. When remote commands are operational, the
+**Pipeline** (`SmsReceiver`): incoming SMS → reassemble multipart → intercept reserved remote-rule
+token prefixes before every forwarding gate. When remote commands are operational, the
 receiver verifies HMAC-SHA256, atomically merges one rule, logs only a generic outcome, and sends a
 generic acknowledgment through every operational channel; the command body is never forwarded
 and acknowledgments never affect stats. When remote commands are disabled or have no valid key,

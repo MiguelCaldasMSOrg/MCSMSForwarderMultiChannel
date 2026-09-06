@@ -277,9 +277,23 @@ function ConvertTo-ValidatedHmacKey {
         [string] $Value
     )
 
-    $normalized = $Value.Trim().ToLowerInvariant()
-    if ($normalized -notmatch '^[0-9a-f]{64}$') {
-        throw "Configuration value 'hmacKey' must contain exactly 64 hexadecimal characters."
+    $normalized = $Value.Trim()
+    if ($normalized -notmatch '^[A-Za-z0-9_-]{43}$') {
+        throw "Configuration value 'hmacKey' must be a canonical 43-character unpadded Base64URL key."
+    }
+    $padded = $normalized.Replace("-", "+").Replace("_", "/") + "="
+    try {
+        $decoded = [Convert]::FromBase64String($padded)
+    } catch {
+        throw "Configuration value 'hmacKey' must be a canonical 43-character unpadded Base64URL key."
+    }
+    try {
+        $canonical = [Convert]::ToBase64String($decoded).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+        if ($decoded.Length -ne 32 -or $canonical -cne $normalized) {
+            throw "Configuration value 'hmacKey' must be a canonical 43-character unpadded Base64URL key."
+        }
+    } finally {
+        [Array]::Clear($decoded, 0, $decoded.Length)
     }
     return $normalized
 }
@@ -514,7 +528,7 @@ function ConvertTo-ValidatedConfiguration {
         $configuration.remoteSmsRules = [ordered]@{
             enabled = Get-ValidatedBoolean $remoteSmsRules "enabled"
             hmacKey = ConvertTo-ValidatedHmacKey (
-                Get-ValidatedString $remoteSmsRules "hmacKey" 64
+                Get-ValidatedString $remoteSmsRules "hmacKey" 43
             )
         }
     }
@@ -652,7 +666,7 @@ function Read-InteractiveConfiguration {
         $configuration.remoteSmsRules = [ordered]@{
             enabled = Read-BooleanChoice "Enable remote SMS commands after import?" $false
             hmacKey = ConvertTo-ValidatedHmacKey (
-                Read-RequiredSecret "Remote SMS HMAC key (hidden, 64 hex characters)" 64
+                Read-RequiredSecret "Remote SMS HMAC key (hidden, 43-character Base64URL)" 43
             )
         }
     }

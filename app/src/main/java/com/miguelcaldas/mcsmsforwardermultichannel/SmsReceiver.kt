@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
 import android.telephony.PhoneNumberUtils
+import com.miguelcaldas.mcsmsforwardermultichannel.util.FilterRuleMutationCoordinator
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardStatsStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
 import com.miguelcaldas.mcsmsforwardermultichannel.util.InboundFilterDecision
@@ -162,32 +163,34 @@ class SmsReceiver: BroadcastReceiver() {
         prefs: android.content.SharedPreferences,
         body: String,
     ) {
-        val config = RemoteSmsRulesConfig.load(context)
-        if (!config.isOperational) {
-            return
-        }
+        val acknowledgement = FilterRuleMutationCoordinator.withLock {
+            val config = RemoteSmsRulesConfig.load(context)
+            if (!config.isOperational) {
+                return@withLock null
+            }
 
-        val acknowledgement = when (val parsed = RemoteSmsRuleCommands.parse(body, config.hmacKey)) {
-            RemoteSmsRuleParseResult.NotCommand -> return
-            RemoteSmsRuleParseResult.Rejected -> {
-                LogUtils.addToLog(context, RemoteSmsRuleCommands.REJECTION_LOG)
-                RemoteSmsRuleCommands.REJECTION_ACKNOWLEDGEMENT
-            }
-            is RemoteSmsRuleParseResult.Accepted -> {
-                val result = try {
-                    RemoteSmsRuleCommands.apply(context, prefs, parsed.command)
-                } catch (_: IllegalStateException) {
+            when (val parsed = RemoteSmsRuleCommands.parse(body, config.hmacKey)) {
+                RemoteSmsRuleParseResult.NotCommand -> null
+                RemoteSmsRuleParseResult.Rejected -> {
                     LogUtils.addToLog(context, RemoteSmsRuleCommands.REJECTION_LOG)
-                    null
-                }
-                if (result == null) {
                     RemoteSmsRuleCommands.REJECTION_ACKNOWLEDGEMENT
-                } else {
-                    LogUtils.addToLog(context, result.logEntry)
-                    result.acknowledgement
+                }
+                is RemoteSmsRuleParseResult.Accepted -> {
+                    val result = try {
+                        RemoteSmsRuleCommands.apply(context, prefs, parsed.command)
+                    } catch (_: IllegalStateException) {
+                        LogUtils.addToLog(context, RemoteSmsRuleCommands.REJECTION_LOG)
+                        null
+                    }
+                    if (result == null) {
+                        RemoteSmsRuleCommands.REJECTION_ACKNOWLEDGEMENT
+                    } else {
+                        LogUtils.addToLog(context, result.logEntry)
+                        result.acknowledgement
+                    }
                 }
             }
-        }
+        } ?: return
         sendRemoteSmsAcknowledgement(context, prefs, acknowledgement)
     }
 

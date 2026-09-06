@@ -1,12 +1,15 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.ui.filters
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
 import android.telephony.PhoneNumberUtils
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
+import com.miguelcaldas.mcsmsforwardermultichannel.util.FilterRuleMutationCoordinator
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
 import com.miguelcaldas.mcsmsforwardermultichannel.util.InboundFilterDecision
+import com.miguelcaldas.mcsmsforwardermultichannel.util.PreferenceSnapshot
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RemoteSmsRulesConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SecureStore
@@ -19,7 +22,10 @@ import com.miguelcaldas.mcsmsforwardermultichannel.util.TextNormalizer
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.decideInboundFilter
 import com.miguelcaldas.mcsmsforwardermultichannel.util.isValidRemoteSmsHmacKey
+import com.miguelcaldas.mcsmsforwardermultichannel.util.mergeDraftWithConcurrentAdditions
 import com.miguelcaldas.mcsmsforwardermultichannel.util.normalizeRemoteSmsHmacKey
+import java.security.GeneralSecurityException
+import java.security.ProviderException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,9 +40,13 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
 
     private val _senders = MutableStateFlow(SenderListStore.load(prefs))
     val senders: StateFlow<List<SenderRule>> = _senders.asStateFlow()
+    private var senderBaseline = _senders.value
+    private var sendersChanged = false
 
     private val _rules = MutableStateFlow(RegexListStore.load(prefs))
     val rules: StateFlow<List<String>> = _rules.asStateFlow()
+    private var ruleBaseline = _rules.value
+    private var rulesChanged = false
 
     private val _template = MutableStateFlow(prefs.getString(ForwardTemplate.KEY, "").orEmpty())
     val template: StateFlow<String> = _template.asStateFlow()
@@ -67,6 +77,7 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         _senders.value = _senders.value.toMutableList().also {
             if (index in it.indices) {
                 it[index] = it[index].copy(value = sanitized)
+                sendersChanged = true
             }
         }
     }
@@ -75,16 +86,19 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         _senders.value = _senders.value.toMutableList().also {
             if (index in it.indices) {
                 it[index] = it[index].copy(isRegex = isRegex)
+                sendersChanged = true
             }
         }
     }
 
     fun addSender() {
         _senders.value = _senders.value + SenderRule("")
+        sendersChanged = true
     }
 
     fun removeSenderAt(index: Int) {
         _senders.value = _senders.value.filterIndexed { i, _ -> i != index }
+        sendersChanged = true
     }
 
     fun updateRule(index: Int, value: String) {
@@ -93,16 +107,19 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         _rules.value = _rules.value.toMutableList().also {
             if (index in it.indices) {
                 it[index] = sanitized
+                rulesChanged = true
             }
         }
     }
 
     fun addRule() {
         _rules.value = _rules.value + ""
+        rulesChanged = true
     }
 
     fun removeRuleAt(index: Int) {
         _rules.value = _rules.value.filterIndexed { i, _ -> i != index }
+        rulesChanged = true
     }
 
     fun setTemplate(value: String) {
@@ -127,7 +144,11 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
 
     fun refresh() {
         _senders.value = SenderListStore.load(prefs)
+        senderBaseline = _senders.value
+        sendersChanged = false
         _rules.value = RegexListStore.load(prefs)
+        ruleBaseline = _rules.value
+        rulesChanged = false
         _template.value = prefs.getString(ForwardTemplate.KEY, "").orEmpty()
         val remoteConfig = RemoteSmsRulesConfig.load(getApplication())
         _remoteSmsEnabled.value = remoteConfig.enabled
@@ -239,13 +260,14 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun save(): String {
-        val normalizedKey = if (remoteSmsKeyChanged) {
+        val keyChanged = remoteSmsKeyChanged
+        val normalizedKey = if (keyChanged) {
             normalizeRemoteSmsHmacKey(_remoteSmsKey.value)
         } else {
             null
         }
         if (normalizedKey != null && normalizedKey.isNotEmpty() && !isValidRemoteSmsHmacKey(normalizedKey)) {
-            return "The remote SMS HMAC key must contain exactly 64 hexadecimal characters."
+            return "The remote SMS HMAC key must be a canonical 43-character unpadded Base64URL value."
         }
         val effectiveHasKey = when {
             normalizedKey == null -> _remoteSmsKeySaved.value
@@ -256,21 +278,168 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
             return "Add a valid HMAC key before enabling remote SMS commands."
         }
 
-        if (normalizedKey != null) {
-            SecureStore.write(
-                getApplication(),
-                SecureStore.KEY_REMOTE_SMS_HMAC,
-                normalizedKey,
-            )
-        }
-        prefs.edit {
-            SenderListStore.write(this, _senders.value)
-            RegexListStore.write(this, _rules.value)
-            putString(ForwardTemplate.KEY, _template.value)
-            putBoolean(RemoteSmsRulesConfig.KEY_ENABLED, _remoteSmsEnabled.value)
+        val draft = FiltersSaveDraft(
+            senders = _senders.value.filter { it.value.isNotBlank() },
+            senderBaseline = senderBaseline,
+            sendersChanged = sendersChanged,
+            rules = _rules.value.filter { it.isNotBlank() },
+            ruleBaseline = ruleBaseline,
+            rulesChanged = rulesChanged,
+            template = _template.value,
+            remoteSmsEnabled = _remoteSmsEnabled.value,
+            remoteSmsKeyChanged = keyChanged,
+            normalizedRemoteSmsKey = normalizedKey,
+        )
+        val result = persistDraft(draft)
+        if (!result.saved) {
+            return result.message
         }
         refresh()
         return saveWarning() ?: "Filters saved"
+    }
+
+    @SuppressLint("UseKtx")
+    private fun persistDraft(draft: FiltersSaveDraft): SaveAttempt =
+        FilterRuleMutationCoordinator.withLock {
+            // Key rotation/removal spans two preference files. Checked commits keep the control
+            // feature disabled until both the encrypted secret and public state are durable.
+            val previousPreferences = PreferenceSnapshot.capture(
+                prefs = prefs,
+                keys = setOf(
+                    SenderListStore.KEY,
+                    SenderListStore.KEY_REGEX_FLAGS,
+                    RegexListStore.KEY,
+                    ForwardTemplate.KEY,
+                    RemoteSmsRulesConfig.KEY_ENABLED,
+                ),
+            )
+            val previousRemoteSmsKey = if (draft.remoteSmsKeyChanged) {
+                SecureStore.read(getApplication(), SecureStore.KEY_REMOTE_SMS_HMAC)
+            } else {
+                null
+            }
+            val countryIso = SenderMatcher.deviceCountryIso(getApplication())
+            val sendersToWrite = if (draft.sendersChanged) {
+                mergeDraftWithConcurrentAdditions(
+                    baseline = draft.senderBaseline,
+                    draft = draft.senders,
+                    current = SenderListStore.load(prefs),
+                ) { left, right ->
+                    SenderMatcher.equivalent(left, right, countryIso)
+                }
+            } else {
+                null
+            }
+            val rulesToWrite = if (draft.rulesChanged) {
+                mergeDraftWithConcurrentAdditions(
+                    baseline = draft.ruleBaseline,
+                    draft = draft.rules,
+                    current = RegexListStore.load(prefs),
+                    equivalent = { left, right -> left == right },
+                )
+            } else {
+                null
+            }
+
+            try {
+                if (draft.remoteSmsKeyChanged) {
+                    check(
+                        prefs.edit()
+                            .putBoolean(RemoteSmsRulesConfig.KEY_ENABLED, false)
+                            .commit(),
+                    ) {
+                        "Could not disable remote SMS commands before updating the key."
+                    }
+                    SecureStore.writeAll(
+                        getApplication(),
+                        mapOf(
+                            SecureStore.KEY_REMOTE_SMS_HMAC to
+                                checkNotNull(draft.normalizedRemoteSmsKey),
+                        ),
+                    )
+                }
+
+                val editor = prefs.edit()
+                sendersToWrite?.let { SenderListStore.write(editor, it) }
+                rulesToWrite?.let { RegexListStore.write(editor, it) }
+                editor
+                    .putString(ForwardTemplate.KEY, draft.template)
+                    .putBoolean(
+                        RemoteSmsRulesConfig.KEY_ENABLED,
+                        draft.remoteSmsEnabled,
+                    )
+                check(editor.commit()) { "Could not persist filters." }
+            } catch (_: GeneralSecurityException) {
+                return@withLock rollbackFailedSave(
+                    previousPreferences,
+                    previousRemoteSmsKey,
+                    draft.remoteSmsKeyChanged,
+                )
+            } catch (_: ProviderException) {
+                return@withLock rollbackFailedSave(
+                    previousPreferences,
+                    previousRemoteSmsKey,
+                    draft.remoteSmsKeyChanged,
+                )
+            } catch (_: IllegalStateException) {
+                return@withLock rollbackFailedSave(
+                    previousPreferences,
+                    previousRemoteSmsKey,
+                    draft.remoteSmsKeyChanged,
+                )
+            }
+
+            SaveAttempt(saved = true, message = "")
+        }
+
+    @SuppressLint("UseKtx")
+    private fun rollbackFailedSave(
+        previousPreferences: PreferenceSnapshot,
+        previousRemoteSmsKey: String?,
+        remoteSmsKeyChanged: Boolean,
+    ): SaveAttempt {
+        var restored = true
+        if (remoteSmsKeyChanged) {
+            try {
+                SecureStore.writeAll(
+                    getApplication(),
+                    mapOf(
+                        SecureStore.KEY_REMOTE_SMS_HMAC to previousRemoteSmsKey.orEmpty(),
+                    ),
+                )
+            } catch (_: GeneralSecurityException) {
+                restored = false
+            } catch (_: ProviderException) {
+                restored = false
+            } catch (_: IllegalStateException) {
+                restored = false
+            }
+        }
+        if (restored) {
+            try {
+                previousPreferences.restore(prefs)
+            } catch (_: IllegalStateException) {
+                restored = false
+            }
+        }
+        if (!restored) {
+            val disabled = prefs.edit()
+                .putBoolean(RemoteSmsRulesConfig.KEY_ENABLED, false)
+                .commit()
+            _remoteSmsEnabled.value = false
+            return SaveAttempt(
+                saved = false,
+                message = if (disabled) {
+                    "Could not save filters; remote SMS commands were left disabled."
+                } else {
+                    "Could not save filters or confirm that remote SMS commands were disabled. Review the saved settings before continuing."
+                },
+            )
+        }
+        return SaveAttempt(
+            saved = false,
+            message = "Could not save filters; previous settings were restored.",
+        )
     }
 
     // Non-blocking, save-time advisory shown after a successful save. Blank rows are dropped on
@@ -290,4 +459,22 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         const val KEY_LAST_TEST_SENDER = "lastTestSender"
         const val KEY_LAST_TEST_MESSAGE = "lastTestMessage"
     }
+
+    private data class FiltersSaveDraft(
+        val senders: List<SenderRule>,
+        val senderBaseline: List<SenderRule>,
+        val sendersChanged: Boolean,
+        val rules: List<String>,
+        val ruleBaseline: List<String>,
+        val rulesChanged: Boolean,
+        val template: String,
+        val remoteSmsEnabled: Boolean,
+        val remoteSmsKeyChanged: Boolean,
+        val normalizedRemoteSmsKey: String?,
+    )
+
+    private data class SaveAttempt(
+        val saved: Boolean,
+        val message: String,
+    )
 }

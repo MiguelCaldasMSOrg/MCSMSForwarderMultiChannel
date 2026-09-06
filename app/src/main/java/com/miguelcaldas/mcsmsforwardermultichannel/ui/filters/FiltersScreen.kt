@@ -168,7 +168,7 @@ private fun RemoteSmsRulesCard(
     val isSavedMask = key == RemoteSmsRulesConfig.HMAC_KEY_MASK
     val invalidKey = key.isNotEmpty() && !isSavedMask && !isValidRemoteSmsHmacKey(key)
     val supportingText = when {
-        invalidKey -> "Enter exactly 64 hexadecimal characters."
+        invalidKey -> "Enter a 43-character unpadded Base64URL key."
         isSavedMask -> "Key saved. Leave the mask unchanged to keep it."
         key.isNotEmpty() && keySaved -> "New key will replace the saved key when you tap Save."
         key.isNotEmpty() -> "New key will be saved when you tap Save."

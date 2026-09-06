@@ -73,8 +73,7 @@ class ProvisioningBundleTest {
 
         assertEquals(true, result.remoteSmsRules?.enabled)
         assertEquals(
-            "000102030405060708090a0b0c0d0e0f" +
-                "101112131415161718191a1b1c1d1e1f",
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
             result.remoteSmsRules?.hmacKey,
         )
     }
@@ -168,13 +167,12 @@ class ProvisioningBundleTest {
 
     @Test
     fun acceptsCompleteRemoteSmsRulesConfiguration() {
-        val key = "000102030405060708090a0b0c0d0e0f" +
-            "101112131415161718191a1b1c1d1e1f"
+        val key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
         val payload = JSONObject().put(
             "remoteSmsRules",
             JSONObject()
                 .put("enabled", true)
-                .put("hmacKey", key.uppercase()),
+                .put("hmacKey", key),
         )
 
         val result = ProvisioningBundle.decrypt(encrypt(payload), passphrase)
@@ -203,7 +201,7 @@ class ProvisioningBundleTest {
             }.message,
         )
         assertEquals(
-            "Configuration value 'hmacKey' must contain exactly 64 hexadecimal characters.",
+            "Configuration value 'hmacKey' must be a canonical 43-character unpadded Base64URL key.",
             assertThrows(ProvisioningException::class.java) {
                 ProvisioningBundle.decrypt(encrypt(invalid), passphrase)
             }.message,

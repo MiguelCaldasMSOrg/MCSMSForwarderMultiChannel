@@ -6,8 +6,6 @@ import android.content.SharedPreferences
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.security.MessageDigest
-import java.util.Base64
-import java.util.Locale
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -134,17 +132,22 @@ internal object RemoteSmsRuleCommands {
     internal const val MAX_VALUE_LENGTH = 4_096
     internal const val MAX_LIST_ENTRIES = 1_000
     private val PAYLOAD_PATTERN = Regex("[A-Za-z0-9_-]+")
-    private val MAC_PATTERN = Regex("[0-9a-f]{64}")
+    private val MAC_PATTERN = Regex("[A-Za-z0-9_-]{43}")
 
     fun isReserved(body: String): Boolean {
-        val token = canonicalize(body).substringBefore(':')
-        return RemoteSmsRuleType.fromToken(token) != null
+        val canonicalBody = canonicalize(body)
+        return RemoteSmsRuleType.entries.any { canonicalBody.startsWith(it.token) }
     }
 
     fun parse(body: String, hmacKey: String): RemoteSmsRuleParseResult {
         val canonicalBody = canonicalize(body)
         val token = canonicalBody.substringBefore(':')
-        val type = RemoteSmsRuleType.fromToken(token) ?: return RemoteSmsRuleParseResult.NotCommand
+        val type = RemoteSmsRuleType.fromToken(token)
+            ?: return if (isReserved(canonicalBody)) {
+                RemoteSmsRuleParseResult.Rejected
+            } else {
+                RemoteSmsRuleParseResult.NotCommand
+            }
         if (!isValidRemoteSmsHmacKey(hmacKey)) {
             return RemoteSmsRuleParseResult.Rejected
         }
@@ -162,16 +165,20 @@ internal object RemoteSmsRuleCommands {
             return RemoteSmsRuleParseResult.Rejected
         }
 
-        val expectedMac = hmacHex(
-            keyHex = normalizeRemoteSmsHmacKey(hmacKey),
+        val suppliedMacBytes = decodeCanonicalUnpaddedBase64Url(suppliedMac)
+            ?.takeIf { it.size == 32 }
+            ?: return RemoteSmsRuleParseResult.Rejected
+        val expectedMacBytes = hmacBytes(
+            keyBase64Url = normalizeRemoteSmsHmacKey(hmacKey),
             text = "${type.token}:$payload",
         )
-        if (
-            !MessageDigest.isEqual(
-                expectedMac.toByteArray(Charsets.US_ASCII),
-                suppliedMac.toByteArray(Charsets.US_ASCII),
-            )
-        ) {
+        val macMatches = try {
+            MessageDigest.isEqual(expectedMacBytes, suppliedMacBytes)
+        } finally {
+            expectedMacBytes.fill(0)
+            suppliedMacBytes.fill(0)
+        }
+        if (!macMatches) {
             return RemoteSmsRuleParseResult.Rejected
         }
 
@@ -202,9 +209,17 @@ internal object RemoteSmsRuleCommands {
         )
     }
 
-    @SuppressLint("UseKtx")
-    @Synchronized
     fun apply(
+        context: Context,
+        prefs: SharedPreferences,
+        command: RemoteSmsRuleCommand,
+    ): RemoteSmsRuleApplyResult =
+        FilterRuleMutationCoordinator.withLock {
+            applyLocked(context, prefs, command)
+        }
+
+    @SuppressLint("UseKtx")
+    private fun applyLocked(
         context: Context,
         prefs: SharedPreferences,
         command: RemoteSmsRuleCommand,
@@ -236,15 +251,23 @@ internal object RemoteSmsRuleCommands {
         return merged.result
     }
 
-    internal fun hmacHex(keyHex: String, text: String): String {
-        val normalizedKey = normalizeRemoteSmsHmacKey(keyHex)
+    internal fun hmacBase64Url(keyBase64Url: String, text: String): String {
+        val digest = hmacBytes(keyBase64Url, text)
+        return try {
+            encodeUnpaddedBase64Url(digest)
+        } finally {
+            digest.fill(0)
+        }
+    }
+
+    private fun hmacBytes(keyBase64Url: String, text: String): ByteArray {
+        val normalizedKey = normalizeRemoteSmsHmacKey(keyBase64Url)
         require(isValidRemoteSmsHmacKey(normalizedKey))
-        val key = decodeHex(normalizedKey)
+        val key = checkNotNull(decodeCanonicalUnpaddedBase64Url(normalizedKey))
         return try {
             val mac = Mac.getInstance("HmacSHA256")
             mac.init(SecretKeySpec(key, "HmacSHA256"))
             mac.doFinal(text.toByteArray(Charsets.UTF_8))
-                .joinToString("") { byte -> "%02x".format(Locale.ROOT, byte.toInt() and 0xff) }
         } finally {
             key.fill(0)
         }
@@ -258,23 +281,11 @@ internal object RemoteSmsRuleCommands {
         }
 
     private fun decodePayload(payload: String): String? {
-        val bytes = try {
-            Base64.getUrlDecoder().decode(payload)
-        } catch (_: IllegalArgumentException) {
-            return null
-        }
+        val bytes = decodeCanonicalUnpaddedBase64Url(payload) ?: return null
         return try {
-            if (Base64.getUrlEncoder().withoutPadding().encodeToString(bytes) != payload) {
-                return null
-            }
             Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString()
         } catch (_: CharacterCodingException) {
             null
         }
     }
-
-    private fun decodeHex(value: String): ByteArray =
-        ByteArray(value.length / 2) { index ->
-            value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
-        }
 }

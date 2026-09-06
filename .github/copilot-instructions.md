@@ -136,23 +136,30 @@ review flow but still uses Android's normal runtime authorization.
 
 **Remote SMS rule commands**: the optional control feature lives in the Filters screen and is
 independent of the master switch/channel readiness. `RemoteSmsRulesConfig` stores
-`remoteSmsRulesEnabled` in normal prefs and the 64-hex HMAC key under
+`remoteSmsRulesEnabled` in normal prefs and the canonical 43-character unpadded Base64URL HMAC key under
 `SecureStore.KEY_REMOTE_SMS_HMAC`. The key field is write-only; the trailing X marks it for removal,
 turns the draft switch off, and persists only on Filters Save. Valid provisioning must supply the
 complete `remoteSmsRules { enabled, hmacKey }` pair; application disables the feature, writes the
 secret, then restores the requested enabled state with normal snapshot/rollback behavior.
 
-Commands are exactly `TOKEN:BASE64URL_VALUE:LOWERCASE_HEX_HMAC`, where TOKEN is `MCSMSSL`
+Commands are exactly `TOKEN:BASE64URL_VALUE:BASE64URL_HMAC`, where TOKEN is `MCSMSSL`
 (literal sender), `MCSMSSR` (sender full-string RegEx), or `MCSMSMR` (message RegEx). Base64URL is
-UTF-8 and unpadded; HMAC-SHA256 covers the exact `TOKEN:BASE64URL_VALUE` text. There is deliberately
-no sender restriction, version, timestamp, sequence, command ID, or replay protection. Reserved
-messages are consumed before normal filters and never logged/forwarded verbatim. Every reserved
+canonical and unpadded; the UTF-8 value and 256-bit HMAC tag are encoded separately. The shared
+256-bit key uses the same 43-character encoding. HMAC-SHA256 covers the exact
+`TOKEN:BASE64URL_VALUE` text. There is deliberately
+no sender restriction, version, timestamp, sequence, command ID, or replay protection. Any message
+beginning with a reserved token is consumed before normal filters, even when the separator or
+remaining syntax is malformed, and is never logged/forwarded verbatim. Every reserved
 message received while control is operational gets a generic acknowledgment through all
 operational channels, including malformed, invalid-HMAC, and duplicate commands; this accepted
 behavior permits unauthenticated acknowledgment traffic/cost. Acknowledgments ignore the master
 switch, never increment stats, and contain no rule/key data. Successful commands use the existing
 mode-aware/phone-aware sender merge or exact message-RegEx merge. `tools/New-RemoteRuleSms.ps1`
 generates keys or commands, prints by default, and supports `-Copy` and `-OutputPath` in both modes.
+`FilterRuleMutationCoordinator` serializes remote additions, provisioning merges, and manual
+Filters saves. Filters drafts preserve additions made after the screen opened, and HMAC-key
+rotation/removal uses checked disable-first commits with rollback rather than asynchronous writes.
+Legacy v1.0.13 hexadecimal keys/tags are rejected and are intentionally not migrated.
 
 **Build information**: the Status screen ends with a low-emphasis outlined About card. It reads
 `BuildConfig.VERSION_NAME`, the generated UTC build epoch, and the source revision through
