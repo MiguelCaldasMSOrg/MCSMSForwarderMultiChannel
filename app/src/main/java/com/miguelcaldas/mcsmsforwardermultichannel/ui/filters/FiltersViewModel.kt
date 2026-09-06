@@ -8,6 +8,8 @@ import androidx.lifecycle.AndroidViewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
 import com.miguelcaldas.mcsmsforwardermultichannel.util.InboundFilterDecision
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
+import com.miguelcaldas.mcsmsforwardermultichannel.util.RemoteSmsRulesConfig
+import com.miguelcaldas.mcsmsforwardermultichannel.util.SecureStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderMatcher
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderRule
@@ -16,6 +18,8 @@ import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.TextNormalizer
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.decideInboundFilter
+import com.miguelcaldas.mcsmsforwardermultichannel.util.isValidRemoteSmsHmacKey
+import com.miguelcaldas.mcsmsforwardermultichannel.util.normalizeRemoteSmsHmacKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +40,20 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
 
     private val _template = MutableStateFlow(prefs.getString(ForwardTemplate.KEY, "").orEmpty())
     val template: StateFlow<String> = _template.asStateFlow()
+
+    private val initialRemoteConfig = RemoteSmsRulesConfig.load(application)
+    private val _remoteSmsEnabled = MutableStateFlow(initialRemoteConfig.enabled)
+    val remoteSmsEnabled: StateFlow<Boolean> = _remoteSmsEnabled.asStateFlow()
+
+    private val _remoteSmsKey = MutableStateFlow(
+        if (initialRemoteConfig.hasKey) RemoteSmsRulesConfig.HMAC_KEY_MASK else "",
+    )
+    val remoteSmsKey: StateFlow<String> = _remoteSmsKey.asStateFlow()
+
+    private val _remoteSmsKeySaved = MutableStateFlow(initialRemoteConfig.hasKey)
+    val remoteSmsKeySaved: StateFlow<Boolean> = _remoteSmsKeySaved.asStateFlow()
+
+    private var remoteSmsKeyChanged = false
 
     // Edits mutate in-memory draft state only; nothing is persisted until save() is called,
     // mirroring the explicit Save button on the channel detail screens. Senders and rules are
@@ -89,6 +107,33 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
 
     fun setTemplate(value: String) {
         _template.value = value
+    }
+
+    fun setRemoteSmsEnabled(enabled: Boolean) {
+        _remoteSmsEnabled.value = enabled
+    }
+
+    fun setRemoteSmsKey(value: String) {
+        _remoteSmsKey.value = value.replace('\r', ' ').replace('\n', ' ')
+        remoteSmsKeyChanged = _remoteSmsKey.value != RemoteSmsRulesConfig.HMAC_KEY_MASK
+    }
+
+    fun removeRemoteSmsKey() {
+        _remoteSmsEnabled.value = false
+        _remoteSmsKey.value = ""
+        _remoteSmsKeySaved.value = false
+        remoteSmsKeyChanged = true
+    }
+
+    fun refresh() {
+        _senders.value = SenderListStore.load(prefs)
+        _rules.value = RegexListStore.load(prefs)
+        _template.value = prefs.getString(ForwardTemplate.KEY, "").orEmpty()
+        val remoteConfig = RemoteSmsRulesConfig.load(getApplication())
+        _remoteSmsEnabled.value = remoteConfig.enabled
+        _remoteSmsKey.value = if (remoteConfig.hasKey) RemoteSmsRulesConfig.HMAC_KEY_MASK else ""
+        _remoteSmsKeySaved.value = remoteConfig.hasKey
+        remoteSmsKeyChanged = false
     }
 
     // The message has no default — it starts blank unless a previous test was run, in which
@@ -193,12 +238,39 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         return TestOutcome(builder.toString(), if (wouldSend) Tone.POSITIVE else Tone.NEUTRAL)
     }
 
-    fun save() {
-        SenderListStore.save(prefs, _senders.value)
-        RegexListStore.save(prefs, _rules.value)
-        prefs.edit {
-            putString(ForwardTemplate.KEY, _template.value)
+    fun save(): String {
+        val normalizedKey = if (remoteSmsKeyChanged) {
+            normalizeRemoteSmsHmacKey(_remoteSmsKey.value)
+        } else {
+            null
         }
+        if (normalizedKey != null && normalizedKey.isNotEmpty() && !isValidRemoteSmsHmacKey(normalizedKey)) {
+            return "The remote SMS HMAC key must contain exactly 64 hexadecimal characters."
+        }
+        val effectiveHasKey = when {
+            normalizedKey == null -> _remoteSmsKeySaved.value
+            normalizedKey.isEmpty() -> false
+            else -> true
+        }
+        if (_remoteSmsEnabled.value && !effectiveHasKey) {
+            return "Add a valid HMAC key before enabling remote SMS commands."
+        }
+
+        if (normalizedKey != null) {
+            SecureStore.write(
+                getApplication(),
+                SecureStore.KEY_REMOTE_SMS_HMAC,
+                normalizedKey,
+            )
+        }
+        prefs.edit {
+            SenderListStore.write(this, _senders.value)
+            RegexListStore.write(this, _rules.value)
+            putString(ForwardTemplate.KEY, _template.value)
+            putBoolean(RemoteSmsRulesConfig.KEY_ENABLED, _remoteSmsEnabled.value)
+        }
+        refresh()
+        return saveWarning() ?: "Filters saved"
     }
 
     // Non-blocking, save-time advisory shown after a successful save. Blank rows are dropped on

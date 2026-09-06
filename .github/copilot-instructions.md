@@ -12,9 +12,9 @@
 ```
 
 Focused JVM tests cover filtering/normalization, sender rules, log classification, permission
-readiness, concurrency/deadline behavior, build metadata, and encrypted provisioning (including
-PowerShell interoperability). No instrumentation suite is configured; use Gradle lint for Android
-static checks.
+readiness, concurrency/deadline behavior, build metadata, authenticated remote-SMS command
+parsing/merging, and encrypted provisioning (including PowerShell interoperability). No
+instrumentation suite is configured; use Gradle lint for Android static checks.
 
 The build uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
 `targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00
@@ -49,9 +49,10 @@ Single-module Android app (`:app`), Kotlin. The UI is **Jetpack Compose** (Mater
 `AppRoot` hosts a `NavController` that routes between screens (status, channels, filters, log).
 Each screen has an `AndroidViewModel` exposing `StateFlow` draft state.
 
-**Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`MasterSwitchStore.load`, default
-ON) → bail if **no channel is operational** (each channel: enabled toggle on AND credentials
-present) → reassemble multipart → **SMS loop guard** (drop messages
+**Pipeline** (`SmsReceiver`): incoming SMS → reassemble multipart → intercept a reserved remote-SMS
+rule command before all forwarding gates (see below) → master kill-switch (`MasterSwitchStore.load`,
+default ON) → bail if **no channel is operational** (each channel: enabled toggle on AND credentials
+present) → **SMS loop guard** (drop messages
 from the SMS forward destination via `PhoneNumberUtils.areSamePhoneNumber`; SMS channel only) →
 normalize the body with `TextNormalizer.normalizeForMatching` (NFD + strip combining marks +
 lowercase) → compile each unchanged message-regex source and match any (`runCatching` per pattern;
@@ -133,6 +134,26 @@ SMS permissions as restricted: Play distribution requires a permissions declarat
 for an eligible core use such as device automation. The GitHub-distributed APK is outside that
 review flow but still uses Android's normal runtime authorization.
 
+**Remote SMS rule commands**: the optional control feature lives in the Filters screen and is
+independent of the master switch/channel readiness. `RemoteSmsRulesConfig` stores
+`remoteSmsRulesEnabled` in normal prefs and the 64-hex HMAC key under
+`SecureStore.KEY_REMOTE_SMS_HMAC`. The key field is write-only; the trailing X marks it for removal,
+turns the draft switch off, and persists only on Filters Save. Valid provisioning must supply the
+complete `remoteSmsRules { enabled, hmacKey }` pair; application disables the feature, writes the
+secret, then restores the requested enabled state with normal snapshot/rollback behavior.
+
+Commands are exactly `TOKEN:BASE64URL_VALUE:LOWERCASE_HEX_HMAC`, where TOKEN is `MCSMSSL`
+(literal sender), `MCSMSSR` (sender full-string RegEx), or `MCSMSMR` (message RegEx). Base64URL is
+UTF-8 and unpadded; HMAC-SHA256 covers the exact `TOKEN:BASE64URL_VALUE` text. There is deliberately
+no sender restriction, version, timestamp, sequence, command ID, or replay protection. Reserved
+messages are consumed before normal filters and never logged/forwarded verbatim. Every reserved
+message received while control is operational gets a generic acknowledgment through all
+operational channels, including malformed, invalid-HMAC, and duplicate commands; this accepted
+behavior permits unauthenticated acknowledgment traffic/cost. Acknowledgments ignore the master
+switch, never increment stats, and contain no rule/key data. Successful commands use the existing
+mode-aware/phone-aware sender merge or exact message-RegEx merge. `tools/New-RemoteRuleSms.ps1`
+generates keys or commands, prints by default, and supports `-Copy` and `-OutputPath` in both modes.
+
 **Build information**: the Status screen ends with a low-emphasis outlined About card. It reads
 `BuildConfig.VERSION_NAME`, the generated UTC build epoch, and the source revision through
 `BuildMetadata`. Release Actions captures one timestamp immediately before the Gradle
@@ -162,8 +183,9 @@ ShortcutBadger's normal launcher selection and accept that it may be unsupported
 does not create forwarding-result or persistent count notifications. Do not add manufacturer
 detection around ShortcutBadger; rely on its launcher selection and accept a no-op when unsupported.
 
-**Persistence**: non-secret state uses a single `SharedPreferences` file named `mc_sms_fwd_wa`; the
-two channel tokens use the separate encrypted store described below. There is no database. Lists
+**Persistence**: non-secret state uses a single `SharedPreferences` file named `mc_sms_fwd_wa`;
+the WhatsApp token, Telegram token, and remote-SMS HMAC key use the separate encrypted store
+described below. There is no database. Lists
 (sender values, sender RegEx flags, message regexes) are parallel/newline-delimited strings. Logs use a
 `timestamp\x1Fmessage` format with auto-pruning (35 days / 2000 entries); `LogUtils.addToLog`
 collapses CR/LF/`\x1F` runs in the message to a space so multi-line bodies can't corrupt the
@@ -172,10 +194,10 @@ line-oriented format. WhatsApp credentials live under keys defined in `WhatsAppC
 code (see the WhatsApp channel above); the separate shared forwarding template uses
 `forwardTemplate`. Telegram: `tgEnabled` (default false), `tgChatId` (`TelegramConfig`). SMS:
 `smsEnabled` (default false) and
-`forwardTo` — the destination number (`SmsConfig`). **Secrets (the WhatsApp access token `waAccessToken` and
-the Telegram bot token `tgBotToken`) are NOT in this file** — `SecureStore` encrypts them with
-AES/GCM using a key held by Android Keystore, then stores the ciphertext in the private
-`mc_sms_fwd_secure` preferences file. Configs read tokens by calling
+`forwardTo` — the destination number (`SmsConfig`). **Secrets (the WhatsApp access token
+`waAccessToken`, Telegram bot token `tgBotToken`, and remote HMAC key `remoteSmsHmacKey`) are NOT in
+this file** — `SecureStore` encrypts them with AES/GCM using a key held by Android Keystore, then
+stores the ciphertext in the private `mc_sms_fwd_secure` preferences file. Configs read secrets by calling
 `SecureStore.read(context, …)`, so `WhatsAppConfig.load`/`TelegramConfig.load` take a `Context`
 (not a `SharedPreferences`).
 Lifetime forward-stat keys remain in the normal preferences file. The transient
@@ -188,18 +210,19 @@ import code. All routes use the same authenticated parser. `tools/New-Provisioni
 in one file, prompts securely by default, refuses repository-local inputs/outputs, optionally
 generates a QR locally through pinned `qrcode` 1.5.4, and encrypts a versioned JSON payload using
 PBKDF2-HMAC-SHA256 plus AES-256-GCM. It can carry the master switch, WhatsApp, Telegram, SMS,
-allowed senders, regex rules, and the shared forwarding template. `ProvisioningBundle` bounds and
-validates the envelope before decrypting, writes tokens through `SecureStore.writeAll`, and writes
+remote SMS command configuration, allowed senders, regex rules, and the shared forwarding
+template. `ProvisioningBundle` bounds and
+validates the envelope before decrypting, writes secrets through `SecureStore.writeAll`, and writes
 only supplied scalar fields to the normal preferences. Sender/rule lists are merge-only:
 existing entries are never deleted or reordered, sender duplicates are mode-aware (plus
 phone-equivalence for literal numbers), and message-regex duplicates use exact equality.
 `{ "value": "...", "regex": true|false }` objects carry sender rules; implicit string entries are
 rejected. Reapplying a bundle is idempotent. Imports never log or retain
 secrets, and manual edits remain available afterward. Applying a bundle first disables the master
-switch and included channels, commits the public fields, commits encrypted secrets, and only then
-restores the requested enabled states; rollback restores the prior snapshot, while an unrecoverable
-partial write stays disabled. The `mc_sms_fwd_secure` preferences file is excluded from Android
-backup and device transfer because its Keystore key cannot be transferred.
+switch and included channels/control features, commits the public fields, commits encrypted
+secrets, and only then restores the requested enabled states; rollback restores the prior snapshot,
+while an unrecoverable partial write stays disabled. The `mc_sms_fwd_secure` preferences file is
+excluded from Android backup and device transfer because its Keystore key cannot be transferred.
 
 **Screens** are Compose, each backed by an `AndroidViewModel`. Manual form edits mutate in-memory
 draft `StateFlow`s and are persisted only when the user taps the screen's explicit **Save** button

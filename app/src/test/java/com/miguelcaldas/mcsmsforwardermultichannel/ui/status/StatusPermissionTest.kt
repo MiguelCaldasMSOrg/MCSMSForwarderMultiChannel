@@ -71,4 +71,18 @@ class StatusPermissionTest {
             permissionDeniedMessage(Manifest.permission.POST_NOTIFICATIONS),
         )
     }
+
+    @Test
+    fun remoteSmsKeyBlocksReadinessOnlyWhileEnabled() {
+        assertNull(remoteSmsHealthItem(enabled = false, hasKey = false))
+        assertNull(remoteSmsHealthItem(enabled = true, hasKey = true))
+        assertEquals(
+            HealthItem(
+                "Add remote SMS command key",
+                "Filters",
+                HealthAction.OPEN_FILTERS,
+            ),
+            remoteSmsHealthItem(enabled = true, hasKey = false),
+        )
+    }
 }

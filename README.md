@@ -8,7 +8,7 @@ Listens for incoming SMS on an Android device, runs them through a sender/regex 
 
 Each channel is independently toggleable; enable one, two, or all three at once.
 
-> **Test variant.** The WhatsApp access token and Telegram bot token are stored **encrypted at rest** (AES/GCM using a key held by Android Keystore, separate from the app's plaintext `SharedPreferences`) and are **write-only** in the UI — once saved they are never re-displayed. The SMS channel needs no token — it uses the device modem. Even so, only install on a device you fully control, and use the narrowest credentials you can.
+> **Test variant.** The WhatsApp access token, Telegram bot token, and remote-SMS HMAC key are stored **encrypted at rest** (AES/GCM using a key held by Android Keystore, separate from the app's plaintext `SharedPreferences`) and are **write-only** in the UI — once saved they are never re-displayed. The SMS channel needs no token — it uses the device modem. Even so, only install on a device you fully control, and use the narrowest credentials you can.
 
 ## Screenshots
 
@@ -41,6 +41,9 @@ documentation images.
 
 - `BroadcastReceiver` listens to `SMS_RECEIVED`.
 - Reassembles multipart messages.
+- Intercepts the reserved `MCSMSSL`, `MCSMSSR`, and `MCSMSMR` remote-rule commands before normal
+  forwarding checks. When enabled, it verifies the HMAC and adds one literal sender, sender RegEx,
+  or message RegEx; command messages are never forwarded or logged verbatim.
 - Drops everything unless the **master switch** is on.
 - Suppresses any message that arrives from the **SMS forward destination** (loop guard, SMS channel only).
 - Normalizes the body (NFD + strip combining marks + lowercase) and matches it against **any** configured regex. Regex source is not normalized, so rules must be lowercase and accent-free.
@@ -60,8 +63,59 @@ The reception, filtering, normalization, multipart handling, and template logic 
 > for troubleshooting. They follow the normal 35-day/2,000-entry pruning policy and are included
 > when you use **Share**, so clear or share the log accordingly.
 
+## Remote SMS rule commands
+
+The Filters screen can enable authenticated SMS commands that add one rule at a time. The feature
+works independently of the master switch and channel readiness. Its 256-bit shared HMAC key is
+write-only and stored through Android Keystore-backed `SecureStore`.
+
+Commands are one line:
+
+```text
+MCSMSSL:<unpadded-base64url-sender>:<64-lowercase-hex-hmac>
+MCSMSSR:<unpadded-base64url-sender-regex>:<64-lowercase-hex-hmac>
+MCSMSMR:<unpadded-base64url-message-regex>:<64-lowercase-hex-hmac>
+```
+
+The HMAC-SHA256 covers exactly `TOKEN:PAYLOAD`. Base64URL prevents delimiters inside sender and
+RegEx values but provides no confidentiality: the value remains trivially decodable from the SMS.
+Added rules use the same matching conventions as manual rules: textual sender values and RegExes
+should be written lowercase and accent-free.
+There is deliberately no timestamp, sequence, command ID, replay protection, or sender-number
+restriction. Repeated authenticated commands are processed and acknowledged every time; list
+merging remains idempotent, but a replay can re-add a rule after it was manually deleted.
+Treat every generated command as a reusable bearer credential and delete stored copies when they
+are no longer needed.
+
+Every reserved command received while the feature has a valid saved key gets a generic
+acknowledgment through all operational channels—even malformed commands, invalid HMACs, and
+duplicates. This intentionally permits unauthenticated traffic using a reserved prefix to cause
+outbound acknowledgment traffic and possible carrier/API charges. Acknowledgments never contain
+the rule value or key and never increment forwarding statistics.
+
+Generate a key:
+
+```powershell
+pwsh .\tools\New-RemoteRuleSms.ps1 -GenerateKey -Copy
+```
+
+Build a command from cleartext:
+
+```powershell
+pwsh .\tools\New-RemoteRuleSms.ps1 `
+    -MessageRegex `
+    -Value 'otp\s+\d{6}' `
+    -Copy
+```
+
+Both modes print to the terminal by default. `-Copy` and `-OutputPath` can be used independently
+or together; repository-local output files are refused. Build-SMS mode prompts for the HMAC key
+with hidden input when `-HmacKey` is omitted.
+
 ## What is NOT included
 
+- No remote HTTP rule feed, polling timer, WorkManager job, or webhook trigger. Remote rule changes
+  are accepted only through the authenticated SMS command format described above.
 - No forwarding-result or persistent count notifications. Forwarding outcomes remain in the
   **Activity** screen, and the lifetime successful-message count remains in the **Status** screen.
 - No retry / backoff queue. HTTP sends start concurrently so one slow request does not queue or reject another. Each uses an 8.5-second receiver-facing completion deadline; the underlying connection has 8-second connect/read safeguards and may finish later, in which case delivery is reported as unknown. The SMS channel reports the modem result asynchronously in the log. None of the channels retries.
@@ -222,7 +276,7 @@ The release is created only if all validation, tests, signing, and build steps s
 The app's runtime configuration can be initialized without typing every value on the phone. The
 single-file PowerShell 7 helper creates a passphrase-encrypted `.mcsmsconfig` bundle using
 PBKDF2-HMAC-SHA256 and AES-256-GCM. It supports the master switch, all three channel forms, allowed
-senders, regex rules, and the shared forwarding template:
+senders, regex rules, the shared forwarding template, and the remote-SMS command key/state:
 
 ```powershell
 pwsh .\tools\New-ProvisioningBundle.ps1 `
@@ -230,9 +284,10 @@ pwsh .\tools\New-ProvisioningBundle.ps1 `
     -QrCodePath "$HOME\Downloads\mc-sms-forwarder-qr.png"
 ```
 
-The helper prompts for the included values and bundle passphrase; access tokens and the passphrase
-are hidden. It refuses to write output inside this repository. The Channels overflow menu provides
-three equivalent inputs:
+The helper prompts for the included values and bundle passphrase; access tokens, the remote-SMS
+HMAC key, and the passphrase are hidden. A complete `remoteSmsRules` block contains both `enabled`
+and `hmacKey`; partial blocks are rejected. It refuses to write output inside this repository. The
+Channels overflow menu provides three equivalent inputs:
 
 - **Choose file or cloud drive** — Android's document picker can select local storage or an
   installed cloud provider.
@@ -281,6 +336,10 @@ For non-interactive input, pass `-ConfigurationPath` with a JSON file using this
     "enabled": false,
     "destination": "<sms-destination>"
   },
+  "remoteSmsRules": {
+    "enabled": true,
+    "hmacKey": "<64-hex-character-hmac-key>"
+  },
   "filters": {
     "allowedSenders": [
       {
@@ -302,10 +361,11 @@ For non-interactive input, pass `-ConfigurationPath` with a JSON file using this
 ```
 
 Every top-level section and every field inside `filters` is optional. If a channel section is
-included, all of its displayed fields are required and credentials must be nonblank. Runtime
-permissions, the battery-optimization exemption, activity logs, forwarding statistics, and
-remembered dry-run test inputs are device/runtime state and are intentionally not provisioned.
-Every `allowedSenders` entry must explicitly provide both `value` and `regex`.
+included, all of its displayed fields are required and credentials must be nonblank. If
+`remoteSmsRules` is included, both fields are required and `hmacKey` must be exactly 64 hexadecimal
+characters. Runtime permissions, the battery-optimization exemption, activity logs, forwarding
+statistics, and remembered dry-run test inputs are device/runtime state and are intentionally not
+provisioned. Every `allowedSenders` entry must explicitly provide both `value` and `regex`.
 
 Keep that plaintext file outside every Git checkout and delete it securely when it is no longer
 needed. Treat the encrypted bundle as sensitive too, use a strong unique passphrase, keep it
@@ -434,11 +494,32 @@ documented `BatteryLife` lint suppression because immediate forwarding is core t
 behavior. If a device has no activity for the platform action, the screen reports that through a
 snackbar instead of silently doing nothing.
 
-**Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`mc_sms_fwd_wa`/`master_enabled`, default ON) → bail if no channel is operational (enabled toggle on AND credentials present) → reassemble multipart → SMS loop guard (suppress messages from the SMS forward destination) → normalize the body via `TextNormalizer.normalizeForMatching` while leaving regex source unchanged → compile each message regex once and match any → normalize the raw sender and match literal/full-string RegEx sender rules exactly as stored (phone literals keep phone-aware comparison) → evaluate the sender/message truth table: both match = forward, exactly one matches = log `FILTER REJECTED` with the raw sender/message and failed component, neither matches = ignore → apply optional `ForwardTemplate` → `BroadcastReceiver.goAsync()` → fan out the same body to **every operational channel** in parallel. A shared `AtomicInteger` counts pending channel callbacks; once they all complete, the receiver records exactly one stat (if any channel succeeded) and calls `pending.finish()`.
+**Pipeline** (`SmsReceiver`): incoming SMS → reassemble multipart → intercept exact reserved
+remote-rule tokens before every forwarding gate. When remote commands are operational, the
+receiver verifies HMAC-SHA256, atomically merges one rule, logs only a generic outcome, and sends a
+generic acknowledgment through every operational channel; the command body is never forwarded
+and acknowledgments never affect stats. When remote commands are disabled or have no valid key,
+reserved messages are silently consumed. Ordinary messages continue through the master
+kill-switch (`mc_sms_fwd_wa`/`master_enabled`, default ON) → bail if no channel is operational
+(enabled toggle on AND credentials present) → SMS loop guard (suppress messages from the SMS
+forward destination) → normalize the body via `TextNormalizer.normalizeForMatching` while leaving
+regex source unchanged → compile each message regex once and match any → normalize the raw sender
+and match literal/full-string RegEx sender rules exactly as stored (phone literals keep phone-aware
+comparison) → evaluate the sender/message truth table: both match = forward, exactly one matches =
+log `FILTER REJECTED` with the raw sender/message and failed component, neither matches = ignore →
+apply optional `ForwardTemplate` → `BroadcastReceiver.goAsync()` → fan out the same body to
+**every operational channel** in parallel. A shared `AtomicInteger` counts pending channel
+callbacks; once they all complete, the receiver records exactly one stat (if any channel
+succeeded) and calls `pending.finish()`.
 
 `WhatsAppCloudChannel`, `TelegramChannel`, and `SmsChannel` are sibling singletons. The two HTTP channels share `HttpJsonClient` (a thin `HttpURLConnection` wrapper) and start each request immediately on cached daemon executors (`wa-sender` / `tg-sender`), so overlapping sends run concurrently rather than waiting or being rejected. Each has an 8.5-second completion deadline plus 8-second connect/read safeguards. A request still unwinding after the completion deadline is logged as having unknown delivery and no longer holds the SMS broadcast open. Each channel reports `SEND OK`/`SEND FAILED` with the HTTP status and provider-specific error summary (Meta `error.{code,type,message}` for WhatsApp, Telegram `error_code` + `description` for Telegram). Neither ever logs its bearer/bot token. `SmsChannel` dispatches through `SmsManager.sendMultipartTextMessage` and registers a private result receiver that logs the modem's per-segment outcome. Stats are owned solely by `SmsReceiver` — the channels only log.
 
-Secrets (the WhatsApp access token and Telegram bot token) are encrypted by the `SecureStore` singleton with AES/GCM using a key held by Android Keystore, then stored in the private `mc_sms_fwd_secure` preferences file. `WhatsAppConfig.load` / `TelegramConfig.load` take a `Context` so they can read those tokens; everything else (toggles, phone numbers, chat IDs, lists, logs, stats) stays in the plaintext `mc_sms_fwd_wa` prefs.
+Secrets (the WhatsApp access token, Telegram bot token, and remote-SMS HMAC key) are encrypted by
+the `SecureStore` singleton with AES/GCM using a key held by Android Keystore, then stored in the
+private `mc_sms_fwd_secure` preferences file. `WhatsAppConfig.load`, `TelegramConfig.load`, and
+`RemoteSmsRulesConfig.load` take a `Context` so they can read those secrets; everything else
+(toggles, phone numbers, chat IDs, lists, logs, stats) stays in the plaintext `mc_sms_fwd_wa`
+preferences.
 
 ## License
 

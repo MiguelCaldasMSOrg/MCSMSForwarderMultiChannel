@@ -18,7 +18,7 @@
 </head>
 <body>
     <h1>Privacy Policy</h1>
-    <p class="updated">MC SMS Forwarder (Multi-Channel) &middot; Last updated: 5 September 2026</p>
+    <p class="updated">MC SMS Forwarder (Multi-Channel) &middot; Last updated: 6 September 2026</p>
 
     <p>This Privacy Policy explains how the <strong>MC SMS Forwarder (Multi-Channel)</strong> application (the &ldquo;App&rdquo;) handles information. The App is a personal utility that forwards incoming SMS messages from the device on which it is installed to one or more destinations chosen by the device owner (the WhatsApp Cloud API, Telegram, and/or another phone number via SMS).</p>
 
@@ -29,7 +29,8 @@
     <ul>
         <li><strong>SMS message content and sender.</strong> When an SMS arrives, the App reads the sender and message body to decide whether it matches the forwarding rules you configured. Matching messages are forwarded to the destinations you enabled, after applying your optional forwarding template.</li>
         <li><strong>Configuration you enter or import.</strong> Allowed senders, matching rules, forwarding templates, destination identifiers (WhatsApp recipient number, Telegram chat ID, SMS destination number), and encrypted provisioning input are processed locally on the device. Provisioning may be supplied through Android's document picker, pasted as an encrypted code, or scanned as a QR code.</li>
-        <li><strong>Credentials.</strong> The WhatsApp Cloud API access token and the Telegram bot token are stored encrypted at rest on the device and are used only to authenticate requests to those services. They are never displayed back in the interface and are never written to logs.</li>
+        <li><strong>Credentials.</strong> The WhatsApp Cloud API access token, Telegram bot token, and optional remote-SMS HMAC key are stored encrypted at rest on the device. Channel tokens are used only to authenticate requests to those services; the HMAC key authenticates remote rule commands. They are never displayed back in the interface and are never written to logs.</li>
+        <li><strong>Remote SMS rule commands.</strong> If enabled, the App recognizes reserved SMS commands that can add one sender or message rule even while forwarding is paused. The rule value is Base64URL-encoded but not encrypted, so it remains readable to the mobile carrier, messaging app, device backups, and anyone with access to the SMS. The App never stores the raw command in its own activity log.</li>
         <li><strong>Optional QR scanning.</strong> When you choose QR import, Google Play services provides the scanner and processes the camera image on-device. The App does not request camera permission, receive the camera image, or retain it; it receives only the decoded encrypted provisioning text.</li>
         <li><strong>Local activity log.</strong> The App keeps an on-device troubleshooting log containing timestamps, send outcomes, destination identifiers, and message content. When exactly one of the sender and message-rule checks succeeds, the log records the full raw sender and message and identifies the failed check, even though that message is not forwarded. Loop-guard entries may also contain the sender number. Logs are pruned automatically and never contain channel credentials. You can explicitly share the currently displayed log with another app using the Share action.</li>
         <li><strong>Forwarding statistics and launcher badge.</strong> The App stores lifetime forwarding counts and timestamps plus a separate count of messages successfully forwarded since the App was last opened from its launcher icon. On compatible devices, only that numeric unseen count is sent locally to the installed launcher or the device manufacturer's badge mechanism. The App requests notification permission as a general prerequisite for launcher-badge compatibility, although a particular launcher may not use it. Badge updates do not create sound, vibration, banners, status-bar icons, or notification-shade entries. No sender, recipient, credential, or message content is included.</li>
@@ -50,6 +51,7 @@
         </li>
         <li>Optional QR scanning is supplied by Google Play services and occurs on-device. We do not sell, rent, or otherwise share your data with any other third party.</li>
         <li>If your launcher supports notification-free numeric badges, the App sends the current unseen-forward count to that launcher or to an on-device manufacturer badge provider. This is local inter-app communication and contains only an integer.</li>
+        <li>Every reserved remote-rule command received while the feature is configured causes a generic acknowledgment to every operational channel, including malformed, unauthenticated, and duplicate commands. The acknowledgment contains no rule value, sender, MAC, or key, but it may incur carrier or API charges.</li>
     </ul>
 
     <h2>Data retention</h2>

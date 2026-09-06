@@ -17,7 +17,7 @@
 </head>
 <body>
     <h1>Terms of Service</h1>
-    <p class="updated">MC SMS Forwarder (Multi-Channel) &middot; Last updated: 4 September 2026</p>
+    <p class="updated">MC SMS Forwarder (Multi-Channel) &middot; Last updated: 6 September 2026</p>
 
     <p>These Terms of Service (&ldquo;Terms&rdquo;) govern your use of the <strong>MC SMS Forwarder (Multi-Channel)</strong> application (the &ldquo;App&rdquo;), a personal utility that forwards incoming SMS messages from your device to destinations you configure (the WhatsApp Cloud API, Telegram, and/or another phone number via SMS). By installing or using the App, you agree to these Terms.</p>
 
@@ -25,7 +25,7 @@
     <p>The App is provided by <strong>Gomes Pereira, Lda.</strong> (&ldquo;we&rdquo;, &ldquo;us&rdquo;). Contact: <strong>webmaster@gptur.pt</strong>.</p>
 
     <h2>What the App does</h2>
-    <p>The App reads incoming SMS messages on the device, evaluates them against rules you define (allowed senders and message patterns), and forwards matching messages to the destinations you have enabled and supplied credentials for. All processing and configuration occur on your device.</p>
+    <p>The App reads incoming SMS messages on the device, evaluates them against rules you define (allowed senders and message patterns), and forwards matching messages to the destinations you have enabled and supplied credentials for. If you enable remote SMS commands, authenticated commands can add rules independently of the master forwarding switch. All processing and configuration occur on your device.</p>
 
     <h2>Your responsibilities</h2>
     <ul>
@@ -34,6 +34,7 @@
         <li><strong>Your credentials and accounts.</strong> You are responsible for the WhatsApp Cloud API, Telegram, and carrier accounts you connect, and for keeping their credentials secure. You must comply with the terms of those services, including the
             <a href="https://www.whatsapp.com/legal/business-policy/">WhatsApp Business Messaging Policy</a> and the
             <a href="https://developers.facebook.com/terms/">Meta Platform Terms</a>.</li>
+        <li><strong>Remote command key.</strong> You are responsible for protecting the remote-SMS HMAC key and for messages generated with it. Remote command payloads are encoded, not encrypted, and can be read wherever the SMS is visible.</li>
         <li><strong>No prohibited content.</strong> You must not use the App to forward spam, unlawful, abusive, or infringing content, or to violate the policies of any destination platform.</li>
     </ul>
 
@@ -41,7 +42,7 @@
     <p>The App relies on third-party services that you choose to enable — the WhatsApp Cloud API (Meta Platforms, Inc.), the Telegram Bot API (Telegram), your mobile carrier&rsquo;s SMS network, and Google Play services for optional on-device QR scanning. Your use of those services is governed by their own terms and policies. We are not responsible for their availability or behavior.</p>
 
     <h2>Charges</h2>
-    <p>Forwarding via SMS may incur message charges from your mobile carrier. Forwarding via the WhatsApp Cloud API may incur charges under Meta&rsquo;s pricing. You are solely responsible for any such charges.</p>
+    <p>Forwarding and remote-command acknowledgments via SMS may incur message charges from your mobile carrier. WhatsApp Cloud API acknowledgments and forwarded messages may incur charges under Meta&rsquo;s pricing. Every reserved remote-command SMS can trigger acknowledgments even when it is malformed or unauthenticated. You are solely responsible for any such charges.</p>
 
     <h2>No warranty</h2>
     <p>The App is provided &ldquo;as is&rdquo; and &ldquo;as available&rdquo;, without warranties of any kind, whether express or implied, including but not limited to fitness for a particular purpose and uninterrupted or error-free operation. Message delivery depends on third-party services and is not guaranteed.</p>

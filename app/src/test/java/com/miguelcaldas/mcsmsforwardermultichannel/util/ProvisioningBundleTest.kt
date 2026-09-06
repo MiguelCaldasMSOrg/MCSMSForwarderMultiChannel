@@ -61,6 +61,25 @@ class ProvisioningBundleTest {
     }
 
     @Test
+    fun decryptsPowerShellRemoteSmsRulesBundle() {
+        val bundle = requireNotNull(
+            javaClass.getResource("/powershell-provisioning-remote-sms-v1.json"),
+        ).readText()
+
+        val result = ProvisioningBundle.decrypt(
+            bundle,
+            "remote-sms-passphrase-123".toCharArray(),
+        )
+
+        assertEquals(true, result.remoteSmsRules?.enabled)
+        assertEquals(
+            "000102030405060708090a0b0c0d0e0f" +
+                "101112131415161718191a1b1c1d1e1f",
+            result.remoteSmsRules?.hmacKey,
+        )
+    }
+
+    @Test
     fun additiveMergeIsIdempotentAndPreservesExistingEntries() {
         val existing = listOf("existing", "duplicate", "duplicate")
         val additions = listOf("duplicate", "new", "new")
@@ -144,6 +163,50 @@ class ProvisioningBundleTest {
                 SenderRule("^chave.*digital$", isRegex = true),
             ),
             result.filters?.allowedSenders,
+        )
+    }
+
+    @Test
+    fun acceptsCompleteRemoteSmsRulesConfiguration() {
+        val key = "000102030405060708090a0b0c0d0e0f" +
+            "101112131415161718191a1b1c1d1e1f"
+        val payload = JSONObject().put(
+            "remoteSmsRules",
+            JSONObject()
+                .put("enabled", true)
+                .put("hmacKey", key.uppercase()),
+        )
+
+        val result = ProvisioningBundle.decrypt(encrypt(payload), passphrase)
+
+        assertEquals(true, result.remoteSmsRules?.enabled)
+        assertEquals(key, result.remoteSmsRules?.hmacKey)
+    }
+
+    @Test
+    fun rejectsIncompleteOrInvalidRemoteSmsRulesConfiguration() {
+        val incomplete = JSONObject().put(
+            "remoteSmsRules",
+            JSONObject().put("enabled", true),
+        )
+        val invalid = JSONObject().put(
+            "remoteSmsRules",
+            JSONObject()
+                .put("enabled", true)
+                .put("hmacKey", "abcd"),
+        )
+
+        assertEquals(
+            "Configuration value 'hmacKey' must be text.",
+            assertThrows(ProvisioningException::class.java) {
+                ProvisioningBundle.decrypt(encrypt(incomplete), passphrase)
+            }.message,
+        )
+        assertEquals(
+            "Configuration value 'hmacKey' must contain exactly 64 hexadecimal characters.",
+            assertThrows(ProvisioningException::class.java) {
+                ProvisioningBundle.decrypt(encrypt(invalid), passphrase)
+            }.message,
         )
     }
 

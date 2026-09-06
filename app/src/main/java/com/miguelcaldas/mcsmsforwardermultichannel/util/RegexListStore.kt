@@ -13,9 +13,12 @@ object RegexListStore {
         prefs.getString(KEY, "")?.split('\n')?.filter { it.isNotBlank() } ?: emptyList()
 
     fun save(prefs: SharedPreferences, patterns: List<String>) {
-        val normalized = patterns.filter { it.isNotBlank() }
         prefs.edit {
-            putString(KEY, normalized.joinToString("\n"))
+            write(this, patterns)
         }
+    }
+
+    internal fun write(editor: SharedPreferences.Editor, patterns: List<String>) {
+        editor.putString(KEY, patterns.filter { it.isNotBlank() }.joinToString("\n"))
     }
 }

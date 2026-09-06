@@ -12,6 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardStatsStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.MasterSwitchStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
+import com.miguelcaldas.mcsmsforwardermultichannel.util.RemoteSmsRulesConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderMatcher
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SmsConfig
@@ -52,6 +53,13 @@ internal fun permissionHealthItems(
         add(HealthItem("Grant SMS sending", "Grant", HealthAction.GRANT_SEND_SMS))
     }
 }
+
+internal fun remoteSmsHealthItem(enabled: Boolean, hasKey: Boolean): HealthItem? =
+    if (enabled && !hasKey) {
+        HealthItem("Add remote SMS command key", "Filters", HealthAction.OPEN_FILTERS)
+    } else {
+        null
+    }
 
 /** Forward counter snapshot, pre-formatted for display. */
 data class StatsUi(val count: String, val first: String, val last: String)
@@ -122,6 +130,7 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
         val waConfig = WhatsAppConfig.load(context)
         val tgConfig = TelegramConfig.load(context)
         val smsConfig = SmsConfig.load(prefs)
+        val remoteSmsRules = RemoteSmsRulesConfig.load(context)
         val items = mutableListOf<HealthItem>()
 
         fun require(satisfied: Boolean, label: String, fixLabel: String, action: HealthAction) {
@@ -153,6 +162,7 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
         if (smsConfig.enabled) {
             require(smsConfig.destination.isNotEmpty(), "Add SMS destination", "Open", HealthAction.OPEN_CHANNELS)
         }
+        remoteSmsHealthItem(remoteSmsRules.enabled, remoteSmsRules.hasKey)?.let(items::add)
         require(
             SenderListStore.load(prefs).any(SenderMatcher::isValidRegex),
             "Add a valid sender rule",

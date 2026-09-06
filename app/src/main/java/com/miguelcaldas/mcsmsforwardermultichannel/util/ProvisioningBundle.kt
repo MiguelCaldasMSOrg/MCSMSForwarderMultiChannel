@@ -40,12 +40,18 @@ internal data class ProvisionedFilters(
     val forwardTemplate: String?,
 )
 
+internal data class ProvisionedRemoteSmsRules(
+    val enabled: Boolean,
+    val hmacKey: String,
+)
+
 internal data class ProvisionedConfiguration(
     val masterEnabled: Boolean?,
     val whatsApp: ProvisionedWhatsApp?,
     val telegram: ProvisionedTelegram?,
     val sms: ProvisionedSms?,
     val filters: ProvisionedFilters?,
+    val remoteSmsRules: ProvisionedRemoteSmsRules?,
 )
 
 internal data class MergedProvisioningEntries<T>(val values: List<T>, val addedCount: Int)
@@ -200,6 +206,9 @@ internal object ProvisioningBundle {
             configuration.telegram?.let {
                 put(SecureStore.KEY_TG_BOT_TOKEN, it.botToken)
             }
+            configuration.remoteSmsRules?.let {
+                put(SecureStore.KEY_REMOTE_SMS_HMAC, it.hmacKey)
+            }
         }
         val previousSecrets = secretUpdates.keys.associateWith { SecureStore.read(context, it) }
         val previousMasterEnabled = MasterSwitchStore.load(prefs)
@@ -224,6 +233,9 @@ internal object ProvisioningBundle {
             if (configuration.sms != null) {
                 add(SmsConfig.KEY_ENABLED)
             }
+            if (configuration.remoteSmsRules != null) {
+                add(RemoteSmsRulesConfig.KEY_ENABLED)
+            }
         }
         val previousPreferences = PreferenceSnapshot.capture(
             prefs = prefs,
@@ -241,6 +253,9 @@ internal object ProvisioningBundle {
                 if (configuration.sms != null) {
                     add(SmsConfig.KEY_ENABLED)
                     add(SmsConfig.KEY_DESTINATION)
+                }
+                if (configuration.remoteSmsRules != null) {
+                    add(RemoteSmsRulesConfig.KEY_ENABLED)
                 }
                 if (mergedSenders != null) {
                     add(SenderListStore.KEY)
@@ -273,6 +288,9 @@ internal object ProvisioningBundle {
             stagedEditor
                 .putBoolean(SmsConfig.KEY_ENABLED, false)
                 .putString(SmsConfig.KEY_DESTINATION, it.destination)
+        }
+        configuration.remoteSmsRules?.let {
+            stagedEditor.putBoolean(RemoteSmsRulesConfig.KEY_ENABLED, false)
         }
         mergedSenders?.let {
             SenderListStore.write(stagedEditor, it.values)
@@ -308,12 +326,15 @@ internal object ProvisioningBundle {
             configuration.sms?.let {
                 enabledEditor.putBoolean(SmsConfig.KEY_ENABLED, it.enabled)
             }
+            configuration.remoteSmsRules?.let {
+                enabledEditor.putBoolean(RemoteSmsRulesConfig.KEY_ENABLED, it.enabled)
+            }
             enabledEditor.putBoolean(
                 MasterSwitchStore.KEY_ENABLED,
                 configuration.masterEnabled ?: previousMasterEnabled,
             )
             if (!enabledEditor.commit()) {
-                throw IllegalStateException("Could not enable imported channel configuration")
+                throw IllegalStateException("Could not enable imported configuration")
             }
         } catch (error: GeneralSecurityException) {
             rollbackAfterSaveFailure(context, prefs, previousSecrets, previousPreferences, enabledKeys, error)
@@ -430,7 +451,7 @@ internal object ProvisioningBundle {
         requireOnlyKeys(
             payload,
             "payload",
-            setOf("masterEnabled", "whatsApp", "telegram", "sms", "filters"),
+            setOf("masterEnabled", "whatsApp", "telegram", "sms", "filters", "remoteSmsRules"),
         )
         val masterEnabled = optionalBoolean(payload, "masterEnabled")
         val whatsApp = optionalObject(payload, "whatsApp")?.let {
@@ -481,12 +502,28 @@ internal object ProvisioningBundle {
                 }
             }
         }
+        val remoteSmsRules = optionalObject(payload, "remoteSmsRules")?.let {
+            requireOnlyKeys(it, "remoteSmsRules", setOf("enabled", "hmacKey"))
+            val hmacKey = normalizeRemoteSmsHmacKey(
+                requiredString(it, "hmacKey", RemoteSmsRulesConfig.HMAC_KEY_HEX_LENGTH),
+            )
+            if (!isValidRemoteSmsHmacKey(hmacKey)) {
+                throw ProvisioningException(
+                    "Configuration value 'hmacKey' must contain exactly 64 hexadecimal characters.",
+                )
+            }
+            ProvisionedRemoteSmsRules(
+                enabled = requiredBoolean(it, "enabled"),
+                hmacKey = hmacKey,
+            )
+        }
         if (
             masterEnabled == null &&
             whatsApp == null &&
             telegram == null &&
             sms == null &&
-            filters == null
+            filters == null &&
+            remoteSmsRules == null
         ) {
             throw ProvisioningException("The configuration does not contain a supported setting.")
         }
@@ -496,6 +533,7 @@ internal object ProvisioningBundle {
             telegram = telegram,
             sms = sms,
             filters = filters,
+            remoteSmsRules = remoteSmsRules,
         )
     }
 
@@ -686,7 +724,7 @@ internal object ProvisioningBundle {
                     else -> error("Unsupported preference value")
                 }
             }
-            check(editor.commit()) { "Could not restore channel configuration" }
+            check(editor.commit()) { "Could not restore imported configuration" }
         }
 
         companion object {

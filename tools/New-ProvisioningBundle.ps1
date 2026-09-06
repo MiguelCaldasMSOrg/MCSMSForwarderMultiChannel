@@ -8,7 +8,7 @@ Creates an encrypted MC SMS Forwarder provisioning bundle.
 Collects runtime settings interactively, or validates them from a plaintext JSON file, then writes
 a versioned PBKDF2-HMAC-SHA256/AES-256-GCM .mcsmsconfig bundle. Secret prompts are hidden, generated
 bundles and plaintext inputs are refused inside the repository, and existing output files require
--Force.
+-Force. The optional remoteSmsRules block contains a complete enabled/HMAC-key pair.
 
 .PARAMETER OutputPath
 Destination .mcsmsconfig path. Its parent directory must already exist and be outside this
@@ -271,6 +271,19 @@ function Get-ValidatedBoolean {
     return $value
 }
 
+function ConvertTo-ValidatedHmacKey {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Value
+    )
+
+    $normalized = $Value.Trim().ToLowerInvariant()
+    if ($normalized -notmatch '^[0-9a-f]{64}$') {
+        throw "Configuration value 'hmacKey' must contain exactly 64 hexadecimal characters."
+    }
+    return $normalized
+}
+
 function Get-ValidatedText {
     param(
         [Parameter(Mandatory)]
@@ -416,7 +429,7 @@ function ConvertTo-ValidatedConfiguration {
     )
 
     $configuration = [ordered]@{}
-    Assert-OnlyProperties $Source @("masterEnabled", "whatsApp", "telegram", "sms", "filters") "payload"
+    Assert-OnlyProperties $Source @("masterEnabled", "whatsApp", "telegram", "sms", "filters", "remoteSmsRules") "payload"
     $masterEnabledProperty = $Source.PSObject.Properties["masterEnabled"]
     if ($null -ne $masterEnabledProperty) {
         $configuration.masterEnabled = Get-ValidatedBoolean $Source "masterEnabled"
@@ -489,6 +502,21 @@ function ConvertTo-ValidatedConfiguration {
             throw "Configuration value 'filters' does not contain a supported setting."
         }
         $configuration.filters = $filters
+    }
+
+    $remoteSmsRulesProperty = $Source.PSObject.Properties["remoteSmsRules"]
+    if ($null -ne $remoteSmsRulesProperty) {
+        $remoteSmsRules = $remoteSmsRulesProperty.Value
+        if ($null -eq $remoteSmsRules) {
+            throw "Configuration value 'remoteSmsRules' must be an object."
+        }
+        Assert-OnlyProperties $remoteSmsRules @("enabled", "hmacKey") "remoteSmsRules"
+        $configuration.remoteSmsRules = [ordered]@{
+            enabled = Get-ValidatedBoolean $remoteSmsRules "enabled"
+            hmacKey = ConvertTo-ValidatedHmacKey (
+                Get-ValidatedString $remoteSmsRules "hmacKey" 64
+            )
+        }
     }
 
     if ($configuration.Count -eq 0) {
@@ -618,6 +646,15 @@ function Read-InteractiveConfiguration {
     }
     if ($filters.Count -gt 0) {
         $configuration.filters = $filters
+    }
+
+    if (Read-BooleanChoice "Include remote SMS command configuration?" $false) {
+        $configuration.remoteSmsRules = [ordered]@{
+            enabled = Read-BooleanChoice "Enable remote SMS commands after import?" $false
+            hmacKey = ConvertTo-ValidatedHmacKey (
+                Read-RequiredSecret "Remote SMS HMAC key (hidden, 64 hex characters)" 64
+            )
+        }
     }
 
     if ($configuration.Count -eq 0) {

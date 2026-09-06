@@ -14,9 +14,8 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Encrypted-at-rest storage for channel secrets (the WhatsApp access token and the
- * Telegram bot token). Values are encrypted with an AES key held by Android Keystore
- * before being written to a private SharedPreferences file.
+ * Encrypted-at-rest storage for channel and remote-control secrets. Values are encrypted with an
+ * AES key held by Android Keystore before being written to a private SharedPreferences file.
  */
 object SecureStore {
     private const val FILE = "mc_sms_fwd_secure"
@@ -27,6 +26,7 @@ object SecureStore {
 
     const val KEY_WA_ACCESS_TOKEN = "waAccessToken"
     const val KEY_TG_BOT_TOKEN = "tgBotToken"
+    const val KEY_REMOTE_SMS_HMAC = "remoteSmsHmacKey"
 
     @Volatile
     private var cached: SharedPreferences? = null
@@ -78,7 +78,7 @@ object SecureStore {
                 editor.putString(key, value)
             }
         }
-        check(editor.commit()) { "Could not persist encrypted channel credentials" }
+        check(editor.commit()) { "Could not persist encrypted secrets" }
     }
 
     private fun encrypt(value: String): String {
