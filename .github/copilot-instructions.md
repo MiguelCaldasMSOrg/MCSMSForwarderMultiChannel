@@ -5,6 +5,8 @@
 ```powershell
 .\gradlew.bat :app:assembleDebug          # build debug APK
 .\gradlew.bat :app:installDebug           # build + install on connected device/emulator
+.\gradlew.bat :app:assembleRelease        # build standard release APK
+.\gradlew.bat :app:assembleMinifiedRelease # build R8-minified release APK
 .\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
 .\gradlew.bat :app:lint                    # run Android static/resource checks
 ```
@@ -20,6 +22,17 @@ The build uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 3
 Gradle's per-variant `GenerateBuildMetadataTask` generates `GeneratedBuildMetadata` at task
 execution; local builds use the current time and Git `HEAD` (`-dirty` when applicable), while
 `BUILD_TIMESTAMP_EPOCH_MILLIS`/`BUILD_SOURCE_REVISION` overrides support deterministic builds.
+
+**Release variants**: `release` is the standard unminified compatibility APK.
+`minifiedRelease` uses `proguard-android-optimize.txt`, `app/proguard-rules.pro`, R8
+minification/obfuscation, and resource shrinking; `debug` also stays unminified. Both release
+variants use the same application ID, version, signing key, source revision, and workflow build
+timestamp. ShortcutBadger's vendor classes are instantiated through `Class.newInstance()`, so
+their public no-argument constructors must remain in the keep rules. The tag workflow uploads
+`app/build/outputs/mapping/minifiedRelease/` as a private `r8-mapping-{tag}` artifact with 90-day
+retention. It also publishes `MC.SMS.Forwarder.minified.mapping.txt.gz` as a durable release asset;
+use that exact tagged mapping to retrace minified stack traces. Mapping contains symbols only,
+never credentials.
 
 **Icons**: launcher fallbacks are checked-in lossless WebP files in each `mipmap-*` density.
 Adaptive descriptors live in `mipmap-anydpi-v26`; Android 13+ descriptors in

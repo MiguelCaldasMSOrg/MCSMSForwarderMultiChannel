@@ -119,14 +119,22 @@ independent numeric badge API.
 
 Download the latest signed release directly from GitHub or from the [project website](https://miguelcaldasmsorg.github.io/MCSMSForwarderMultiChannel/):
 
-- [MC.SMS.Forwarder.apk](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/releases/latest/download/MC.SMS.Forwarder.apk)
-- [MC.SMS.Forwarder.apk.sha256](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/releases/latest/download/MC.SMS.Forwarder.apk.sha256)
+- **Standard:** [MC.SMS.Forwarder.apk](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/releases/latest/download/MC.SMS.Forwarder.apk)
+  ([SHA-256](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/releases/latest/download/MC.SMS.Forwarder.apk.sha256))
+- **Minified:** [MC.SMS.Forwarder.minified.apk](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/releases/latest/download/MC.SMS.Forwarder.minified.apk)
+  ([SHA-256](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/releases/latest/download/MC.SMS.Forwarder.minified.apk.sha256))
 
-Verify the downloaded APK on Windows:
+Both APKs contain the same app ID, version, source revision, build timestamp, and signing
+certificate, so they cannot be installed side by side. The standard APK is unminified for maximum
+diagnostic transparency; the minified APK is functionally equivalent but substantially smaller
+and uses less runtime memory.
+
+Verify either downloaded APK on Windows by matching the names:
 
 ```powershell
-$expected = (Get-Content .\MC.SMS.Forwarder.apk.sha256).Split()[0]
-$actual = (Get-FileHash .\MC.SMS.Forwarder.apk -Algorithm SHA256).Hash
+$apk = ".\MC.SMS.Forwarder.minified.apk"
+$expected = (Get-Content "$apk.sha256").Split()[0]
+$actual = (Get-FileHash $apk -Algorithm SHA256).Hash
 $actual.Equals($expected, [StringComparison]::OrdinalIgnoreCase)
 ```
 
@@ -137,6 +145,8 @@ The command must return `True`. Android may also warn that the APK comes from ou
 ```powershell
 .\gradlew.bat :app:assembleDebug          # build debug APK
 .\gradlew.bat :app:installDebug           # build + install on connected device/emulator
+.\gradlew.bat :app:assembleRelease        # build standard release APK
+.\gradlew.bat :app:assembleMinifiedRelease # build R8-minified release APK
 .\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
 .\gradlew.bat :app:lint                    # run Android static/resource checks
 ```
@@ -152,13 +162,20 @@ tile. Builds package these resources directly; there is no icon-generation step.
 
 Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`). No keystore is committed.
 
+The standard `release` and `debug` builds remain unminified. `minifiedRelease` uses optimized R8
+code shrinking, obfuscation, and resource shrinking. Each tag workflow retains the complete
+`app/build/outputs/mapping/minifiedRelease/` directory as a private `r8-mapping-vX.Y.Z` Actions
+artifact for 90 days. It also publishes `MC.SMS.Forwarder.minified.mapping.txt.gz` with the release
+for durable retracing of stack traces from the exact minified APK. The mapping reveals only symbols
+from this public source/dependency graph; it contains no credentials or runtime configuration.
+
 Each APK embeds its version, UTC build timestamp, and source revision for the **About** card
 at the bottom of the Status screen. Local builds use the current time and Git `HEAD`; `-dirty` is
 appended when the working tree has changes. Embedding the current time intentionally makes
 otherwise identical builds differ. Reproducible builds can provide stable values:
 
 ```powershell
-.\gradlew.bat :app:assembleRelease `
+.\gradlew.bat :app:assembleRelease :app:assembleMinifiedRelease `
     -PBUILD_TIMESTAMP_EPOCH_MILLIS=1788539573000 `
     -PBUILD_SOURCE_REVISION=3ac2192d
 ```
@@ -168,7 +185,7 @@ GitHub's checked-out commit SHA.
 
 ### Publishing a release
 
-The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests and Android lint, builds and verifies the signed APK, generates its SHA-256 checksum, and publishes both files as native GitHub Release assets. The stable links above automatically follow the latest release.
+The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests and Android lint; builds and verifies both signed APKs; privately uploads the full R8 diagnostics for 90 days; generates a separate SHA-256 file for each APK; and publishes both APKs, both checksums, and the compressed minified mapping as native GitHub Release assets. The stable APK links above automatically follow the latest release.
 
 Configure these encrypted repository secrets once under **Settings → Secrets and variables → Actions**:
 

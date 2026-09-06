@@ -110,8 +110,8 @@ android {
         applicationId = "com.miguelcaldas.mcsmsforwardermultichannel"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 11
-        versionName = "1.0.11"
+        versionCode = 12
+        versionName = "1.0.12"
     }
 
     signingConfigs {
@@ -127,17 +127,26 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             } else {
                 logger.warn(
                     "[MCSMSForwarder] No release signing config detected. " +
-                        "assembleRelease will produce an unsigned APK. " +
+                        "Release APKs will be unsigned. " +
                         "Set RELEASE_KEYSTORE_PATH/_PASSWORD/RELEASE_KEY_ALIAS/_PASSWORD " +
                         "in ~/.gradle/gradle.properties to enable signing."
                 )
             }
+        }
+        create("minifiedRelease") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 

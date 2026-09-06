@@ -73,22 +73,36 @@ jobs:
       - name: Capture build timestamp
         run: echo "BUILD_TIMESTAMP_EPOCH_MILLIS=$(date +%s%3N)" >> "$GITHUB_ENV"
 
-      - name: Run unit tests, lint, and assemble signed release APK
-        run: ./gradlew :app:testDebugUnitTest :app:lint :app:assembleRelease --no-daemon
+      - name: Run unit tests, lint, and assemble both signed release APKs
+        run: ./gradlew :app:testDebugUnitTest :app:lint :app:assembleRelease :app:assembleMinifiedRelease --no-daemon
 
-      - name: Verify APK signature and stage release assets
+      - name: Upload private R8 diagnostics
+        uses: actions/upload-artifact@v7
+        with:
+          name: r8-mapping-${{ github.ref_name }}
+          path: app/build/outputs/mapping/minifiedRelease/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Verify APK signatures and stage release assets
         run: |
-          apk="app/build/outputs/apk/release/app-release.apk"
+          standard_apk="app/build/outputs/apk/release/app-release.apk"
+          minified_apk="app/build/outputs/apk/minifiedRelease/app-minifiedRelease.apk"
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
 
-          test -f "$apk"
+          test -f "$standard_apk"
+          test -f "$minified_apk"
           test -n "$apksigner"
-          "$apksigner" verify "$apk"
+          "$apksigner" verify "$standard_apk"
+          "$apksigner" verify "$minified_apk"
 
           mkdir release-assets
-          cp "$apk" release-assets/MC.SMS.Forwarder.apk
+          cp "$standard_apk" release-assets/MC.SMS.Forwarder.apk
+          cp "$minified_apk" release-assets/MC.SMS.Forwarder.minified.apk
+          gzip -9 -c app/build/outputs/mapping/minifiedRelease/mapping.txt > release-assets/MC.SMS.Forwarder.minified.mapping.txt.gz
           cd release-assets
           sha256sum MC.SMS.Forwarder.apk > MC.SMS.Forwarder.apk.sha256
+          sha256sum MC.SMS.Forwarder.minified.apk > MC.SMS.Forwarder.minified.apk.sha256
 
       - name: Upload verified release assets
         uses: actions/upload-artifact@v7
@@ -97,6 +111,9 @@ jobs:
           path: |
             release-assets/MC.SMS.Forwarder.apk
             release-assets/MC.SMS.Forwarder.apk.sha256
+            release-assets/MC.SMS.Forwarder.minified.apk
+            release-assets/MC.SMS.Forwarder.minified.apk.sha256
+            release-assets/MC.SMS.Forwarder.minified.mapping.txt.gz
           if-no-files-found: error
 
   publish-artifacts:
@@ -112,8 +129,8 @@ jobs:
           name: release-${{ github.ref_name }}
           path: release-assets
 
-      - name: Create GitHub release and upload APK
+      - name: Create GitHub release and upload APKs
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" release-assets/MC.SMS.Forwarder.apk release-assets/MC.SMS.Forwarder.apk.sha256 --verify-tag --title "MC SMS Forwarder (Multi-Channel) ${GITHUB_REF_NAME#v}" --generate-notes --latest
+        run: gh release create "$GITHUB_REF_NAME" release-assets/MC.SMS.Forwarder.apk release-assets/MC.SMS.Forwarder.apk.sha256 release-assets/MC.SMS.Forwarder.minified.apk release-assets/MC.SMS.Forwarder.minified.apk.sha256 release-assets/MC.SMS.Forwarder.minified.mapping.txt.gz --verify-tag --title "MC SMS Forwarder (Multi-Channel) ${GITHUB_REF_NAME#v}" --generate-notes --latest
