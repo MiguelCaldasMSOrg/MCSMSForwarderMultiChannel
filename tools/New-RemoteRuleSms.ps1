@@ -8,41 +8,65 @@ Generates a remote-rule HMAC key or one authenticated MC SMS Forwarder command S
 Generate Key mode creates a random 256-bit unpadded Base64URL key. Build SMS mode accepts one
 cleartext literal sender, sender RegEx, or message RegEx, encodes it as unpadded Base64URL, and
 appends the HMAC-SHA256 tag in the same encoding. Output is always written to the terminal;
--Copy and -OutputPath optionally duplicate it to the clipboard and/or a UTF-8 file.
+-CopyToClipboard and -OutputPath optionally duplicate it to the clipboard and/or a UTF-8 file.
+
+.PARAMETER GenerateKey
+Generates a new random 256-bit shared key instead of building a command.
+
+.PARAMETER RuleType
+Rule carried by the command: LiteralSender, SenderRegex, or MessageRegex.
+
+.PARAMETER Value
+Cleartext rule value to encode. Required when RuleType is supplied. Line breaks and values longer
+than 4096 characters are rejected.
+
+.PARAMETER HmacKey
+Optional SecureString containing the canonical 43-character unpadded Base64URL shared key. When
+omitted, the script prompts for it without echoing.
+
+.PARAMETER CopyToClipboard
+Copies the generated key or command to the local clipboard. Clipboard history and other
+applications may retain it.
+
+.PARAMETER OutputPath
+Optional UTF-8 output file. The parent directory must already exist and must be outside this
+repository.
+
+.PARAMETER Force
+Replaces an existing OutputPath file.
+
+.OUTPUTS
+System.String. The generated key or command is always written to the success output stream.
 
 .EXAMPLE
-pwsh .\tools\New-RemoteRuleSms.ps1 -GenerateKey -Copy
+pwsh .\tools\New-RemoteRuleSms.ps1 -GenerateKey -CopyToClipboard
 
 .EXAMPLE
-pwsh .\tools\New-RemoteRuleSms.ps1 -SenderRegex -Value '^chave.*digital$' -Copy
+pwsh .\tools\New-RemoteRuleSms.ps1 -RuleType SenderRegex -Value '^chave.*digital$' -CopyToClipboard
+
+.EXAMPLE
+$key = Read-Host "Remote SMS HMAC key" -AsSecureString
+& .\tools\New-RemoteRuleSms.ps1 -RuleType MessageRegex -Value 'otp\s+\d{6}' -HmacKey $key
 #>
 
-[CmdletBinding(DefaultParameterSetName = "GenerateKey")]
+[CmdletBinding(DefaultParameterSetName = "GenerateKey", PositionalBinding = $false)]
 param(
     [Parameter(Mandatory, ParameterSetName = "GenerateKey")]
     [switch] $GenerateKey,
 
-    [Parameter(Mandatory, ParameterSetName = "LiteralSender")]
-    [switch] $LiteralSender,
+    [Parameter(Mandatory, ParameterSetName = "BuildCommand")]
+    [ValidateSet("LiteralSender", "SenderRegex", "MessageRegex")]
+    [string] $RuleType,
 
-    [Parameter(Mandatory, ParameterSetName = "SenderRegex")]
-    [switch] $SenderRegex,
-
-    [Parameter(Mandatory, ParameterSetName = "MessageRegex")]
-    [switch] $MessageRegex,
-
-    [Parameter(Mandatory, ParameterSetName = "LiteralSender")]
-    [Parameter(Mandatory, ParameterSetName = "SenderRegex")]
-    [Parameter(Mandatory, ParameterSetName = "MessageRegex")]
+    [Parameter(Mandatory, ParameterSetName = "BuildCommand")]
     [ValidateNotNull()]
     [string] $Value,
 
-    [Parameter(ParameterSetName = "LiteralSender")]
-    [Parameter(ParameterSetName = "SenderRegex")]
-    [Parameter(ParameterSetName = "MessageRegex")]
+    [Parameter(ParameterSetName = "BuildCommand")]
     [Security.SecureString] $HmacKey,
 
-    [switch] $Copy,
+    [Alias("Copy")]
+    [switch] $CopyToClipboard,
 
     [string] $OutputPath,
 
@@ -173,7 +197,7 @@ function Write-GeneratedOutput {
 
     Write-Output $GeneratedValue
 
-    if ($Copy) {
+    if ($CopyToClipboard) {
         Set-Clipboard -Value $GeneratedValue
         Write-Warning "Generated value copied to the local clipboard. Clipboard history and other applications may retain it."
     }
@@ -210,7 +234,7 @@ if ($Value.Length -gt $maximumValueLength) {
     throw "Value cannot contain more than $maximumValueLength characters."
 }
 
-$token = switch ($PSCmdlet.ParameterSetName) {
+$token = switch ($RuleType) {
     "LiteralSender" { "MCSMSSL" }
     "SenderRegex" { "MCSMSSR" }
     "MessageRegex" { "MCSMSMR" }

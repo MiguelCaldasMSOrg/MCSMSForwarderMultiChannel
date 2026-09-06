@@ -155,7 +155,8 @@ operational channels, including malformed, invalid-HMAC, and duplicate commands;
 behavior permits unauthenticated acknowledgment traffic/cost. Acknowledgments ignore the master
 switch, never increment stats, and contain no rule/key data. Successful commands use the existing
 mode-aware/phone-aware sender merge or exact message-RegEx merge. `tools/New-RemoteRuleSms.ps1`
-generates keys or commands, prints by default, and supports `-Copy` and `-OutputPath` in both modes.
+uses either `-GenerateKey` or `-RuleType LiteralSender|SenderRegex|MessageRegex`, prints by default,
+and supports `-CopyToClipboard` (alias `-Copy`) and `-OutputPath` in both modes.
 `FilterRuleMutationCoordinator` serializes remote additions, provisioning merges, and manual
 Filters saves. Filters drafts preserve additions made after the screen opened, and HMAC-key
 rotation/removal uses checked disable-first commits with rollback rather than asynchronous writes.

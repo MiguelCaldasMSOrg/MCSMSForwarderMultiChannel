@@ -87,8 +87,8 @@ sender and RegEx values but provides no confidentiality: the value remains trivi
 from the SMS.
 
 > **v1.0.13 upgrade note:** regenerate and replace any hexadecimal remote-SMS key created with
-> v1.0.13. Version 1.0.14 accepts only the canonical Base64URL format and does not migrate legacy
-> keys or commands.
+> v1.0.13. Version 1.0.14 and later accept only the canonical Base64URL format and do not migrate
+> legacy keys or commands.
 
 Added rules use the same matching conventions as manual rules: textual sender values and RegExes
 should be written lowercase and accent-free.
@@ -107,21 +107,22 @@ the rule value or key and never increment forwarding statistics.
 Generate a key:
 
 ```powershell
-pwsh .\tools\New-RemoteRuleSms.ps1 -GenerateKey -Copy
+pwsh .\tools\New-RemoteRuleSms.ps1 -GenerateKey -CopyToClipboard
 ```
 
 Build a command from cleartext:
 
 ```powershell
 pwsh .\tools\New-RemoteRuleSms.ps1 `
-    -MessageRegex `
+    -RuleType MessageRegex `
     -Value 'otp\s+\d{6}' `
-    -Copy
+    -CopyToClipboard
 ```
 
-Both modes print to the terminal by default. `-Copy` and `-OutputPath` can be used independently
-or together; repository-local output files are refused. Build-SMS mode prompts for the HMAC key
-with hidden input when `-HmacKey` is omitted.
+Both modes print to the terminal by default. `-CopyToClipboard` (alias `-Copy`) and `-OutputPath`
+can be used independently or together; repository-local output files are refused. Command mode
+uses `-RuleType LiteralSender`, `SenderRegex`, or `MessageRegex` and prompts for the HMAC key with
+hidden input when `-HmacKey` is omitted.
 
 ## What is NOT included
 

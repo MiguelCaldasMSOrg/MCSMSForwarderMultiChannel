@@ -8,7 +8,8 @@ Creates an encrypted MC SMS Forwarder provisioning bundle.
 Collects runtime settings interactively, or validates them from a plaintext JSON file, then writes
 a versioned PBKDF2-HMAC-SHA256/AES-256-GCM .mcsmsconfig bundle. Secret prompts are hidden, generated
 bundles and plaintext inputs are refused inside the repository, and existing output files require
--Force. The optional remoteSmsRules block contains a complete enabled/HMAC-key pair.
+-Force. The optional remoteSmsRules block contains a complete enabled/HMAC-key pair; its 256-bit
+key is represented as canonical 43-character unpadded Base64URL.
 
 .PARAMETER OutputPath
 Destination .mcsmsconfig path. Its parent directory must already exist and be outside this
@@ -38,9 +39,17 @@ history and other local applications may retain it, so use this only when needed
 pwsh .\tools\New-ProvisioningBundle.ps1 `
     -OutputPath "$HOME\Downloads\mc-sms-forwarder.mcsmsconfig" `
     -QrCodePath "$HOME\Downloads\mc-sms-forwarder-qr.png"
+
+.EXAMPLE
+pwsh .\tools\New-ProvisioningBundle.ps1 `
+    -OutputPath "$HOME\Downloads\mc-sms-forwarder.mcsmsconfig" `
+    -ConfigurationPath "$HOME\Documents\mc-sms-forwarder.json"
+
+.OUTPUTS
+None. Progress and completion messages are written to the host.
 #>
 
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
