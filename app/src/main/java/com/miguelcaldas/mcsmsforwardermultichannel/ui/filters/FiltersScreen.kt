@@ -1,5 +1,6 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.ui.filters
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -26,6 +28,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,12 +61,41 @@ fun FiltersScreen(onBack: () -> Unit, viewModel: FiltersViewModel = viewModel())
     val remoteSmsEnabled by viewModel.remoteSmsEnabled.collectAsStateWithLifecycle()
     val remoteSmsKey by viewModel.remoteSmsKey.collectAsStateWithLifecycle()
     val remoteSmsKeySaved by viewModel.remoteSmsKeySaved.collectAsStateWithLifecycle()
+    val hasUnsavedChanges by viewModel.hasUnsavedChanges.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var discardDialogVisible by rememberSaveable { mutableStateOf(false) }
     // Seed the test inputs once: message from the last test (blank otherwise), sender from the
     // last test or the first phone in the current senders list.
     val initialTestSender = remember { viewModel.defaultTestSender() }
     val initialTestMessage = remember { viewModel.lastTestMessage() }
+
+    BackHandler(enabled = hasUnsavedChanges) {
+        discardDialogVisible = true
+    }
+
+    if (discardDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { discardDialogVisible = false },
+            title = { Text("Discard unsaved changes?") },
+            text = { Text("Your changes on this screen have not been saved.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        discardDialogVisible = false
+                        onBack()
+                    },
+                ) {
+                    Text("Discard")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { discardDialogVisible = false }) {
+                    Text("Keep editing")
+                }
+            },
+        )
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -71,8 +103,26 @@ fun FiltersScreen(onBack: () -> Unit, viewModel: FiltersViewModel = viewModel())
             TopAppBar(
                 title = { Text("Filters") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = {
+                            if (hasUnsavedChanges) {
+                                discardDialogVisible = true
+                            } else {
+                                onBack()
+                            }
+                        },
+                    ) {
                         Icon(painterResource(R.drawable.ic_arrow_back_24), contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (hasUnsavedChanges) {
+                        Text(
+                            "Unsaved changes",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.padding(end = 16.dp),
+                        )
                     }
                 },
             )
@@ -123,14 +173,6 @@ fun FiltersScreen(onBack: () -> Unit, viewModel: FiltersViewModel = viewModel())
                 },
             )
 
-            TestCard(
-                initialSender = initialTestSender,
-                initialMessage = initialTestMessage,
-                onRunTest = { sender, message ->
-                    viewModel.runTest(sender, message)
-                },
-            )
-
             RemoteSmsRulesCard(
                 enabled = remoteSmsEnabled,
                 key = remoteSmsKey,
@@ -140,6 +182,14 @@ fun FiltersScreen(onBack: () -> Unit, viewModel: FiltersViewModel = viewModel())
                 onRemoveKey = viewModel::removeRemoteSmsKey,
             )
 
+            TestCard(
+                initialSender = initialTestSender,
+                initialMessage = initialTestMessage,
+                onRunTest = { sender, message ->
+                    viewModel.runTest(sender, message)
+                },
+            )
+
             Button(
                 onClick = {
                     val message = viewModel.save()
@@ -147,6 +197,7 @@ fun FiltersScreen(onBack: () -> Unit, viewModel: FiltersViewModel = viewModel())
                         snackbarHostState.showSnackbar(message)
                     }
                 },
+                enabled = hasUnsavedChanges,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Save")
@@ -388,9 +439,11 @@ private fun TestCard(
 
     Card {
         Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Test a message", style = MaterialTheme.typography.titleMedium)
+            Text("Test current draft", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Dry-run a sample sender and message against the filters shown above. This mirrors the live pipeline and never sends anything.",
+                "Dry-run the unsaved sender, message-rule, and template values shown above. " +
+                    "Channel readiness comes from saved channel settings. This never sends " +
+                    "anything and does not test the master switch or remote SMS commands.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             OutlinedTextField(

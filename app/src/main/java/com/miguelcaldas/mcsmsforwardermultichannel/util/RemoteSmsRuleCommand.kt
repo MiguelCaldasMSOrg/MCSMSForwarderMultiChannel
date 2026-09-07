@@ -53,9 +53,9 @@ internal data class RemoteSmsRuleApplyResult(
     val logEntry: String
         get() = when (state) {
             RemoteSmsRuleApplyState.ADDED ->
-                "REMOTE RULE ADDED [${type.displayName}]"
+                "${RemoteSmsRuleCommands.LOG_PREFIX}ADDED [${type.displayName}]"
             RemoteSmsRuleApplyState.ALREADY_PRESENT ->
-                "REMOTE RULE ALREADY PRESENT [${type.displayName}]"
+                "${RemoteSmsRuleCommands.LOG_PREFIX}ALREADY PRESENT [${type.displayName}]"
         }
 }
 
@@ -126,8 +126,10 @@ internal fun mergeRemoteSmsRule(
 }
 
 internal object RemoteSmsRuleCommands {
+    const val LOG_PREFIX = "REMOTE RULE "
     const val REJECTION_ACKNOWLEDGEMENT = "MC SMS Forwarder: remote rule command rejected."
-    const val REJECTION_LOG = "REMOTE RULE REJECTED"
+    const val REJECTION_LOG = "${LOG_PREFIX}REJECTED"
+    const val ACK_SKIPPED_NO_CHANNELS_LOG = "${LOG_PREFIX}ACK SKIPPED [no operational channels]"
 
     internal const val MAX_VALUE_LENGTH = 4_096
     internal const val MAX_LIST_ENTRIES = 1_000

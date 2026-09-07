@@ -122,7 +122,10 @@ pwsh .\tools\New-RemoteRuleSms.ps1 `
 Both modes print to the terminal by default. `-CopyToClipboard` (alias `-Copy`) and `-OutputPath`
 can be used independently or together; repository-local output files are refused. Command mode
 uses `-RuleType LiteralSender`, `SenderRegex`, or `MessageRegex` and prompts for the HMAC key with
-hidden input when `-HmacKey` is omitted.
+hidden input when `-HmacKey` is omitted. It also reports the final GSM-7 character count and
+estimated SMS segment count; multipart commands produce a warning because they may cost more and
+are more vulnerable to partial delivery. The generated key/command remains the only success-stream
+output, so scripts can still capture it directly.
 
 ## What is NOT included
 
@@ -466,7 +469,20 @@ Filters are shared by every channel and live on the **Channels** tab under **Sen
 - **Allowed senders** — incoming sender text is lowercased and stripped of accents before matching. Write text rules lowercase and accent-free. A sender matches if any literal or full-string RegEx rule matches; phone-number literals use phone-aware comparison. With no sender rules, no sender matches.
 - **Message format rules** — incoming message text is lowercased and stripped of accents before matching. Write RegEx rules lowercase and accent-free. A message matches if any RegEx rule matches. With no message rules, no message matches.
 - **Forwarding template** (optional) — `%s`, `%t`, `%m` tokens.
-- **Test a message** — an inline card that dry-runs a sample sender + message against the filters as currently shown on screen (no need to save first); the message starts blank and the sender defaults to the first phone-like literal rule, then the first literal rule, while both fields remember the last test. Nothing is sent or logged.
+- **Remote SMS commands** — optional authenticated rule additions and their write-only shared key.
+- **Test current draft** — the final card, after all configuration cards, dry-runs a sample sender
+  and message against the unsaved sender, message-rule, and template values currently shown. Channel
+  readiness comes from saved channel settings. It does not send or log anything and does not test
+  the master switch or remote-command path.
+
+The Save button is enabled only while the screen has unsaved configuration changes. A persistent
+top-bar indicator remains visible while scrolling, and Back asks for confirmation before
+discarding a changed draft.
+
+The **Activity** screen has separate filters and theme-aware colors for successful sends, failed
+sends, filter rejections, remote-rule activity, and boot/tile events. The **Remote rules** filter
+includes additions, authenticated duplicates, rejections, and acknowledgments skipped because no
+channel was operational.
 
 **WhatsApp Cloud API** (Channels tab → WhatsApp)
 

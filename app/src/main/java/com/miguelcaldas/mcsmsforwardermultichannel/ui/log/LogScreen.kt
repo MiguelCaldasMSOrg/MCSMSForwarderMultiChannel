@@ -46,6 +46,8 @@ import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogFailureDark
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogFailureLight
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogFilteredDark
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogFilteredLight
+import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogRemoteDark
+import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogRemoteLight
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogSuccessDark
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogSuccessLight
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
@@ -98,6 +100,7 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
                 FilterChip(selected = filter == LogFilter.SendOk, onClick = { viewModel.setFilter(LogFilter.SendOk) }, label = { Text("Send OK") })
                 FilterChip(selected = filter == LogFilter.SendFailed, onClick = { viewModel.setFilter(LogFilter.SendFailed) }, label = { Text("Failed") })
                 FilterChip(selected = filter == LogFilter.FilterRejected, onClick = { viewModel.setFilter(LogFilter.FilterRejected) }, label = { Text("Filter rejected") })
+                FilterChip(selected = filter == LogFilter.RemoteRules, onClick = { viewModel.setFilter(LogFilter.RemoteRules) }, label = { Text("Remote rules") })
                 FilterChip(selected = filter == LogFilter.Boot, onClick = { viewModel.setFilter(LogFilter.Boot) }, label = { Text("Boot/Tile") })
             }
 
@@ -145,16 +148,17 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
     }
 }
 
-// Color each entry by category. Order matters: FAILED is checked before generic
-// success so "SEND FAILED" is red, not green.
+// Color each entry by its generated prefix so uncontrolled message text cannot spoof a category.
 private fun buildLogText(logs: List<String>, dark: Boolean): AnnotatedString {
     val success: Color = if (dark) LogSuccessDark else LogSuccessLight
     val failure: Color = if (dark) LogFailureDark else LogFailureLight
     val filtered: Color = if (dark) LogFilteredDark else LogFilteredLight
+    val remote: Color = if (dark) LogRemoteDark else LogRemoteLight
     return buildAnnotatedString {
         logs.forEach { entry ->
             val color = when (classifyLogEntry(entry)) {
                 LogEntryType.FilterRejected -> filtered
+                LogEntryType.RemoteRule -> remote
                 LogEntryType.SendFailed -> failure
                 LogEntryType.SendOk -> success
                 LogEntryType.Boot, LogEntryType.Other -> Color.Unspecified

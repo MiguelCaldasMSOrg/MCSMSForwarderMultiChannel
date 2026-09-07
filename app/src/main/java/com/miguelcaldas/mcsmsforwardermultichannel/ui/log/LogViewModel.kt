@@ -6,15 +6,16 @@ import android.content.SharedPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
+import com.miguelcaldas.mcsmsforwardermultichannel.util.RemoteSmsRuleCommands
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-enum class LogFilter { All, SendOk, SendFailed, FilterRejected, Boot }
+enum class LogFilter { All, SendOk, SendFailed, FilterRejected, RemoteRules, Boot }
 enum class LogClearState { Idle, Clearing, Failed }
 
-internal enum class LogEntryType { SendOk, SendFailed, FilterRejected, Boot, Other }
+internal enum class LogEntryType { SendOk, SendFailed, FilterRejected, RemoteRule, Boot, Other }
 
 internal fun classifyLogEntry(entry: String): LogEntryType {
     val message = entry.substringAfter(" \u2192 ", entry)
@@ -22,6 +23,7 @@ internal fun classifyLogEntry(entry: String): LogEntryType {
         message.startsWith("${LogUtils.FILTER_REJECTED_PREFIX} \u2192") -> LogEntryType.FilterRejected
         message.startsWith("SEND OK [") -> LogEntryType.SendOk
         message.startsWith("SEND FAILED [") -> LogEntryType.SendFailed
+        message.startsWith(RemoteSmsRuleCommands.LOG_PREFIX) -> LogEntryType.RemoteRule
         message.startsWith("BOOT \u2192") || message.startsWith("TILE \u2192") -> LogEntryType.Boot
         else -> LogEntryType.Other
     }
@@ -32,6 +34,7 @@ internal fun matchesLogFilter(entry: String, filter: LogFilter): Boolean = when 
     LogFilter.SendOk -> classifyLogEntry(entry) == LogEntryType.SendOk
     LogFilter.SendFailed -> classifyLogEntry(entry) == LogEntryType.SendFailed
     LogFilter.FilterRejected -> classifyLogEntry(entry) == LogEntryType.FilterRejected
+    LogFilter.RemoteRules -> classifyLogEntry(entry) == LogEntryType.RemoteRule
     LogFilter.Boot -> classifyLogEntry(entry) == LogEntryType.Boot
 }
 

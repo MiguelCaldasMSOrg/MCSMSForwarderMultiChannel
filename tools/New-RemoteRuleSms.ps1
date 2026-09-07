@@ -9,6 +9,9 @@ Generate Key mode creates a random 256-bit unpadded Base64URL key. Build SMS mod
 cleartext literal sender, sender RegEx, or message RegEx, encodes it as unpadded Base64URL, and
 appends the HMAC-SHA256 tag in the same encoding. Output is always written to the terminal;
 -CopyToClipboard and -OutputPath optionally duplicate it to the clipboard and/or a UTF-8 file.
+Command mode also reports the final character count and estimated GSM-7 SMS segment count; a
+multipart command produces a warning because it may cost more and is more vulnerable to partial
+delivery.
 
 .PARAMETER GenerateKey
 Generates a new random 256-bit shared key instead of building a command.
@@ -37,6 +40,8 @@ Replaces an existing OutputPath file.
 
 .OUTPUTS
 System.String. The generated key or command is always written to the success output stream.
+Command size information is written to the host, and multipart risk is written to the warning
+stream, so automation still receives only the generated string on the success stream.
 
 .EXAMPLE
 pwsh .\tools\New-RemoteRuleSms.ps1 -GenerateKey -CopyToClipboard
@@ -211,6 +216,25 @@ function Write-GeneratedOutput {
     }
 }
 
+function Write-SmsCommandSize {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Command
+    )
+
+    # Tokens, delimiters, and Base64URL output are all single-septet GSM-7 characters.
+    $characterCount = $Command.Length
+    $segmentCount = if ($characterCount -le 160) {
+        1
+    } else {
+        [int] [Math]::Ceiling($characterCount / 153.0)
+    }
+    Write-Host "SMS command size: $characterCount GSM-7 characters; estimated segments: $segmentCount."
+    if ($segmentCount -gt 1) {
+        Write-Warning "This is a multipart SMS command ($segmentCount estimated segments). It may cost more and is more vulnerable to partial delivery."
+    }
+}
+
 if ($PSCmdlet.ParameterSetName -eq "GenerateKey") {
     $keyBytes = [byte[]]::new(32)
     $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -250,7 +274,9 @@ $authenticatedBytes = [Text.Encoding]::UTF8.GetBytes($authenticatedText)
 $hmac = [Security.Cryptography.HMACSHA256]::new($keyBytes)
 try {
     $mac = ConvertTo-Base64Url ($hmac.ComputeHash($authenticatedBytes))
-    Write-GeneratedOutput "$authenticatedText`:$mac"
+    $command = "$authenticatedText`:$mac"
+    Write-GeneratedOutput $command
+    Write-SmsCommandSize $command
 } finally {
     $hmac.Dispose()
     [Array]::Clear($keyBytes, 0, $keyBytes.Length)

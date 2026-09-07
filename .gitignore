@@ -19,3 +19,6 @@ captures/
 
 # Test-script artifacts
 /ui.xml
+
+# User-private local data. Never inspect, stage, or commit this directory.
+/temp/

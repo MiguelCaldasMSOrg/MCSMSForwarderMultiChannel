@@ -30,6 +30,23 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+internal fun hasUnsavedFilterChanges(
+    senders: List<SenderRule>,
+    senderBaseline: List<SenderRule>,
+    rules: List<String>,
+    ruleBaseline: List<String>,
+    template: String,
+    templateBaseline: String,
+    remoteSmsEnabled: Boolean,
+    remoteSmsEnabledBaseline: Boolean,
+    remoteSmsKeyChanged: Boolean,
+): Boolean =
+    senders != senderBaseline ||
+        rules != ruleBaseline ||
+        template != templateBaseline ||
+        remoteSmsEnabled != remoteSmsEnabledBaseline ||
+        remoteSmsKeyChanged
+
 class FiltersViewModel(application: Application) : AndroidViewModel(application) {
 
     enum class Tone { NEUTRAL, POSITIVE }
@@ -41,29 +58,34 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
     private val _senders = MutableStateFlow(SenderListStore.load(prefs))
     val senders: StateFlow<List<SenderRule>> = _senders.asStateFlow()
     private var senderBaseline = _senders.value
-    private var sendersChanged = false
 
     private val _rules = MutableStateFlow(RegexListStore.load(prefs))
     val rules: StateFlow<List<String>> = _rules.asStateFlow()
     private var ruleBaseline = _rules.value
-    private var rulesChanged = false
 
     private val _template = MutableStateFlow(prefs.getString(ForwardTemplate.KEY, "").orEmpty())
     val template: StateFlow<String> = _template.asStateFlow()
+    private var templateBaseline = _template.value
 
     private val initialRemoteConfig = RemoteSmsRulesConfig.load(application)
     private val _remoteSmsEnabled = MutableStateFlow(initialRemoteConfig.enabled)
     val remoteSmsEnabled: StateFlow<Boolean> = _remoteSmsEnabled.asStateFlow()
+    private var remoteSmsEnabledBaseline = _remoteSmsEnabled.value
 
     private val _remoteSmsKey = MutableStateFlow(
         if (initialRemoteConfig.hasKey) RemoteSmsRulesConfig.HMAC_KEY_MASK else "",
     )
     val remoteSmsKey: StateFlow<String> = _remoteSmsKey.asStateFlow()
+    private var remoteSmsKeyBaseline = _remoteSmsKey.value
 
     private val _remoteSmsKeySaved = MutableStateFlow(initialRemoteConfig.hasKey)
     val remoteSmsKeySaved: StateFlow<Boolean> = _remoteSmsKeySaved.asStateFlow()
+    private var remoteSmsKeySavedBaseline = _remoteSmsKeySaved.value
 
     private var remoteSmsKeyChanged = false
+
+    private val _hasUnsavedChanges = MutableStateFlow(false)
+    val hasUnsavedChanges: StateFlow<Boolean> = _hasUnsavedChanges.asStateFlow()
 
     // Edits mutate in-memory draft state only; nothing is persisted until save() is called,
     // mirroring the explicit Save button on the channel detail screens. Senders and rules are
@@ -77,28 +99,28 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         _senders.value = _senders.value.toMutableList().also {
             if (index in it.indices) {
                 it[index] = it[index].copy(value = sanitized)
-                sendersChanged = true
             }
         }
+        updateUnsavedChanges()
     }
 
     fun setSenderRegex(index: Int, isRegex: Boolean) {
         _senders.value = _senders.value.toMutableList().also {
             if (index in it.indices) {
                 it[index] = it[index].copy(isRegex = isRegex)
-                sendersChanged = true
             }
         }
+        updateUnsavedChanges()
     }
 
     fun addSender() {
         _senders.value = _senders.value + SenderRule("")
-        sendersChanged = true
+        updateUnsavedChanges()
     }
 
     fun removeSenderAt(index: Int) {
         _senders.value = _senders.value.filterIndexed { i, _ -> i != index }
-        sendersChanged = true
+        updateUnsavedChanges()
     }
 
     fun updateRule(index: Int, value: String) {
@@ -107,32 +129,37 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         _rules.value = _rules.value.toMutableList().also {
             if (index in it.indices) {
                 it[index] = sanitized
-                rulesChanged = true
             }
         }
+        updateUnsavedChanges()
     }
 
     fun addRule() {
         _rules.value = _rules.value + ""
-        rulesChanged = true
+        updateUnsavedChanges()
     }
 
     fun removeRuleAt(index: Int) {
         _rules.value = _rules.value.filterIndexed { i, _ -> i != index }
-        rulesChanged = true
+        updateUnsavedChanges()
     }
 
     fun setTemplate(value: String) {
         _template.value = value
+        updateUnsavedChanges()
     }
 
     fun setRemoteSmsEnabled(enabled: Boolean) {
         _remoteSmsEnabled.value = enabled
+        updateUnsavedChanges()
     }
 
     fun setRemoteSmsKey(value: String) {
         _remoteSmsKey.value = value.replace('\r', ' ').replace('\n', ' ')
-        remoteSmsKeyChanged = _remoteSmsKey.value != RemoteSmsRulesConfig.HMAC_KEY_MASK
+        remoteSmsKeyChanged =
+            _remoteSmsKey.value != remoteSmsKeyBaseline ||
+                _remoteSmsKeySaved.value != remoteSmsKeySavedBaseline
+        updateUnsavedChanges()
     }
 
     fun removeRemoteSmsKey() {
@@ -140,21 +167,39 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         _remoteSmsKey.value = ""
         _remoteSmsKeySaved.value = false
         remoteSmsKeyChanged = true
+        updateUnsavedChanges()
     }
 
     fun refresh() {
         _senders.value = SenderListStore.load(prefs)
         senderBaseline = _senders.value
-        sendersChanged = false
         _rules.value = RegexListStore.load(prefs)
         ruleBaseline = _rules.value
-        rulesChanged = false
         _template.value = prefs.getString(ForwardTemplate.KEY, "").orEmpty()
+        templateBaseline = _template.value
         val remoteConfig = RemoteSmsRulesConfig.load(getApplication())
         _remoteSmsEnabled.value = remoteConfig.enabled
+        remoteSmsEnabledBaseline = _remoteSmsEnabled.value
         _remoteSmsKey.value = if (remoteConfig.hasKey) RemoteSmsRulesConfig.HMAC_KEY_MASK else ""
+        remoteSmsKeyBaseline = _remoteSmsKey.value
         _remoteSmsKeySaved.value = remoteConfig.hasKey
+        remoteSmsKeySavedBaseline = _remoteSmsKeySaved.value
         remoteSmsKeyChanged = false
+        _hasUnsavedChanges.value = false
+    }
+
+    private fun updateUnsavedChanges() {
+        _hasUnsavedChanges.value = hasUnsavedFilterChanges(
+            senders = _senders.value,
+            senderBaseline = senderBaseline,
+            rules = _rules.value,
+            ruleBaseline = ruleBaseline,
+            template = _template.value,
+            templateBaseline = templateBaseline,
+            remoteSmsEnabled = _remoteSmsEnabled.value,
+            remoteSmsEnabledBaseline = remoteSmsEnabledBaseline,
+            remoteSmsKeyChanged = remoteSmsKeyChanged,
+        )
     }
 
     // The message has no default — it starts blank unless a previous test was run, in which
@@ -260,6 +305,9 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun save(): String {
+        if (!_hasUnsavedChanges.value) {
+            return "No changes to save."
+        }
         val keyChanged = remoteSmsKeyChanged
         val normalizedKey = if (keyChanged) {
             normalizeRemoteSmsHmacKey(_remoteSmsKey.value)
@@ -281,10 +329,10 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         val draft = FiltersSaveDraft(
             senders = _senders.value.filter { it.value.isNotBlank() },
             senderBaseline = senderBaseline,
-            sendersChanged = sendersChanged,
+            sendersChanged = _senders.value != senderBaseline,
             rules = _rules.value.filter { it.isNotBlank() },
             ruleBaseline = ruleBaseline,
-            rulesChanged = rulesChanged,
+            rulesChanged = _rules.value != ruleBaseline,
             template = _template.value,
             remoteSmsEnabled = _remoteSmsEnabled.value,
             remoteSmsKeyChanged = keyChanged,
@@ -427,6 +475,7 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
                 .putBoolean(RemoteSmsRulesConfig.KEY_ENABLED, false)
                 .commit()
             _remoteSmsEnabled.value = false
+            updateUnsavedChanges()
             return SaveAttempt(
                 saved = false,
                 message = if (disabled) {

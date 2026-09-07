@@ -1,5 +1,15 @@
 # Copilot Instructions — MC SMS Forwarder (Multi-Channel)
 
+## Protected local directory
+
+`C:\Projects\MCSMSForwarderMultiChannel\temp\` is user-private and strictly out of scope. Never
+list, search, read, inspect, hash, summarize, copy, move, execute, upload, or otherwise access that
+directory or anything below it. Never pass the path to `view`, `glob`, `rg`, PowerShell, a
+sub-agent, or any other tool. Do not use `git add -f`, an ignore override, or any other mechanism
+that could stage or publish it. The repository-root `/temp/` rule must remain in `.gitignore`; if
+Git ever reports a tracked path below it, do not inspect the file and immediately stop publication
+until it has been removed from the index without deleting the local copy.
+
 ## Build
 
 ```powershell
@@ -157,6 +167,8 @@ switch, never increment stats, and contain no rule/key data. Successful commands
 mode-aware/phone-aware sender merge or exact message-RegEx merge. `tools/New-RemoteRuleSms.ps1`
 uses either `-GenerateKey` or `-RuleType LiteralSender|SenderRegex|MessageRegex`, prints by default,
 and supports `-CopyToClipboard` (alias `-Copy`) and `-OutputPath` in both modes.
+Command mode writes its GSM-7 character/segment estimate to the host and emits a warning for
+multipart commands without contaminating the generated command's success-stream output.
 `FilterRuleMutationCoordinator` serializes remote additions, provisioning merges, and manual
 Filters saves. Filters drafts preserve additions made after the screen opened, and HMAC-key
 rotation/removal uses checked disable-first commits with rollback rather than asynchronous writes.
@@ -238,8 +250,11 @@ draft `StateFlow`s and are persisted only when the user taps the screen's explic
 passphrase confirmation. On the Filters screen the allowed senders and message-format rules are each
 rendered as editable `OutlinedTextField` rows with a per-row delete button; sender rows also have a
 RegEx filter chip and inline invalid-pattern state (order is not significant). Blank rows are dropped on
-save and ignored by the live pipeline. Channel **Send test** actions use the currently displayed
-draft values without saving them.
+save and ignored by the live pipeline. The Filters screen exposes a persistent
+`hasUnsavedChanges` state: the top bar shows **Unsaved changes**, Save is disabled for a clean
+draft, reverting every edit clears the state, and both toolbar/system Back require discard
+confirmation while dirty. Channel **Send test** actions use the currently displayed draft values
+without saving them.
 
 ## Conventions
 
@@ -270,19 +285,22 @@ draft values without saving them.
   re-displayed (the field loads with a bullet mask); typing replaces the stored token, while
   leaving the mask untouched keeps the existing one. The SMS channel has no secret (it uses the
   device modem).
-- **`FiltersViewModel.runTest` is a dry-run mirror of the live pipeline.** The Filters screen has
-  an inline "Test a message" card (sample sender + message) that subjects the input to the
-  **currently displayed (possibly unsaved) draft** filters — draft senders, draft rules (match any,
-  invalid patterns skipped), draft template — plus the live SMS destination loop guard and the
-  same channels `SmsReceiver` does (all three, via each config's `isOperational`). The last-used sender/message are persisted (`lastTestSender`,
-  `lastTestMessage`); the sender otherwise defaults to the first phone-like literal rule, then the
-  first literal rule. If you add or change a channel or the matching logic, update `runTest` so the
-  two cannot drift.
+- **`FiltersViewModel.runTest` is a dry-run of ordinary forwarding eligibility.** The final Filters
+  card, **Test current draft**, appears after all configuration cards and subjects a sample sender
+  and message to the **currently displayed (possibly unsaved) draft** senders, message rules
+  (match any; invalid patterns skipped), and template, plus the saved channel configurations and
+  live SMS destination loop guard. It deliberately does not evaluate the master switch or remote
+  SMS command path and never sends or logs anything. The last-used sender/message are persisted
+  (`lastTestSender`, `lastTestMessage`); the sender otherwise defaults to the first phone-like
+  literal rule, then the first literal rule.
 - **Filter-rejection diagnostics** implement an XOR rule: when exactly one of sender matching and
   message-rule matching succeeds, `SmsReceiver` writes one `FILTER REJECTED` entry naming the failed
   component and containing the full raw originating address and message. When neither matches it
   stays silent. The Activity screen has a dedicated **Filter rejected** filter and amber rendering.
   This log type intentionally retains sensitive content and is included in Share output.
+- **Remote-rule activity** uses the generated `REMOTE RULE ` prefix and has a dedicated
+  **Remote rules** Activity filter with blue theme-aware rendering. It includes added, already
+  present, rejected, and acknowledgment-skipped outcomes; command data remains absent from logs.
 
 ## Emulator test protocol
 

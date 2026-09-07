@@ -210,7 +210,7 @@ class SmsReceiver: BroadcastReceiver() {
                 (if (sendViaTg) 1 else 0) +
                 (if (sendViaSms) 1 else 0)
         if (channelCount == 0) {
-            LogUtils.addToLog(context, "REMOTE RULE ACK SKIPPED [no operational channels]")
+            LogUtils.addToLog(context, RemoteSmsRuleCommands.ACK_SKIPPED_NO_CHANNELS_LOG)
             return
         }
 
