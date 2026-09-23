@@ -2,13 +2,15 @@
 
 ## Protected local directory
 
-`C:\Projects\MCSMSForwarderMultiChannel\temp\` is user-private and strictly out of scope. Never
-list, search, read, inspect, hash, summarize, copy, move, execute, upload, or otherwise access that
-directory or anything below it. Never pass the path to `view`, `glob`, `rg`, PowerShell, a
-sub-agent, or any other tool. Do not use `git add -f`, an ignore override, or any other mechanism
-that could stage or publish it. The repository-root `/temp/` rule must remain in `.gitignore`; if
-Git ever reports a tracked path below it, do not inspect the file and immediately stop publication
-until it has been removed from the index without deleting the local copy.
+`C:\Projects\MCSMSForwarderMultiChannel\temp\` is user-private and strictly out of scope, except
+for the exact credential file `temp\shortlived.json` under the limited emulator test protocol
+below. Never list, search, read, inspect, hash, summarize, copy, move, execute, upload, or otherwise
+access any other path below that directory. Never pass the directory or any other path below it to
+`view`, `glob`, `rg`, PowerShell, a sub-agent, or any other tool. Do not use `git add -f`, an ignore
+override, or any other mechanism that could stage or publish it. The repository-root `/temp/` rule
+must remain in `.gitignore`; if Git ever reports a tracked path below it, do not inspect the file
+and immediately stop publication until it has been removed from the index without deleting the
+local copy.
 
 ## Build
 
@@ -61,23 +63,23 @@ Each screen has an `AndroidViewModel` exposing `StateFlow` draft state.
 
 **Pipeline** (`SmsReceiver`): incoming SMS → reassemble multipart → intercept a reserved remote-SMS
 rule command before all forwarding gates (see below) → master kill-switch (`MasterSwitchStore.load`,
-default ON) → bail if **no channel is operational** (each channel: enabled toggle on AND credentials
-present) → **SMS loop guard** (drop messages
-from the SMS forward destination via `PhoneNumberUtils.areSamePhoneNumber`; SMS channel only) →
-normalize the body with `TextNormalizer.normalizeForMatching` (NFD + strip combining marks +
-lowercase) → compile each unchanged message-regex source and match any (`runCatching` per pattern;
+default ON) → bail if **no channel is operational** (each channel: enabled toggle on AND
+credentials present) → **SMS loop guard** (drop messages from the SMS forward destination via
+`PhoneNumberUtils.areSamePhoneNumber`; SMS channel only) → normalize the body with
+`TextNormalizer.normalizeForMatching` (NFD + strip combining marks + lowercase) → compile each
+unchanged message-regex source and match any (`runCatching` per pattern;
 invalid patterns silently skip) → normalize the raw sender the same way → match against literal or
 full-string RegEx sender rules exactly as stored (`PhoneNumberUtils.areSamePhoneNumber` remains for
 literal phone rules; invalid sender regexes silently skip) → evaluate both results: both true
-forwards, exactly one true logs `FILTER REJECTED` with the full raw sender/message and failed
-component, both false exits silently → apply
-optional `ForwardTemplate` (`%s`/`%t`/`%m` tokens) → `goAsync()` keeps the receiver alive →
-**fan out the same body to every operational channel** (`WhatsAppCloudChannel`, `TelegramChannel`,
-`SmsChannel`). A shared `AtomicInteger remaining` counts pending channel callbacks; each
-channel's `onComplete(success)` decrements it, and when it reaches zero the receiver records
-**exactly one** forward stat (if any channel succeeded) via `ForwardStatsStore.recordForward`,
-increments the unseen launcher-badge count once, and calls `pending.finish()`. The original
-(accented, cased) body is what gets forwarded — normalization is only for matching.
+forwards, exactly one true logs `FILTER REJECTED` with the full raw sender/message and failed component,
+both false exits silently → apply optional `ForwardTemplate` (`%s`/`%t`/`%m` tokens) →
+`goAsync()` keeps the receiver alive → **fan out the same body to every operational channel**
+(`WhatsAppCloudChannel`, `TelegramChannel`, `SmsChannel`). A shared `AtomicInteger remaining`
+counts pending channel callbacks; each channel's `onComplete(success)` decrements it, and when it reaches
+zero the receiver records **exactly one** forward stat (if any channel succeeded) via
+`ForwardStatsStore.recordForward`, increments the unseen launcher-badge count once, and calls
+`pending.finish()`. The original (accented, cased) body is what gets forwarded — normalization is
+only for matching.
 
 **Loop guard (SMS only).** A message arriving from the SMS forward destination is suppressed so an
 SMS→SMS echo cannot bounce indefinitely. WhatsApp and Telegram run on a different transport and
@@ -91,25 +93,23 @@ stats** — `SmsReceiver` owns the single increment per matched SMS.
 
 **WhatsApp Cloud channel** (`util/WhatsAppCloudChannel.kt`): `object` with a cached daemon
 `Executor` named `wa-sender`; overlapping sends run concurrently rather than queueing or failing busy.
-The message template is **fixed in code** (constants `TEMPLATE_NAME`,
-`TEMPLATE_LANGUAGE`, `TEMPLATE_USER`) — it is intentionally not selectable in the config
-or the UI. It points at the approved `titled_forwarded_sms` template, whose body has two `{{n}}`
-parameters: `{{1}}` is bound to the fixed user `TEMPLATE_USER` (`"Miguel"`) and `{{2}}` to the
-forwarded SMS body. `send`
-builds the template JSON via `buildPayload`, strips the leading `+` from the recipient, opens
-`HttpURLConnection` to
-`https://graph.facebook.com/v21.0/{phoneNumberId}/messages`, writes the body with
+The message template is **fixed in code** (constants `TEMPLATE_NAME`, `TEMPLATE_LANGUAGE`,
+`TEMPLATE_USER`) — it is intentionally not selectable in the config or the UI. It points at the
+approved `titled_forwarded_sms` template, whose body has two `{{n}}` parameters: `{{1}}` is bound to
+the fixed user `TEMPLATE_USER` (`"Miguel"`) and `{{2}}` to the forwarded SMS body. `send` builds the
+template JSON via `buildPayload`, strips the leading `+` from the recipient, and opens
+`HttpURLConnection` to `https://graph.facebook.com/v21.0/{phoneNumberId}/messages`. It writes the body with
 `setFixedLengthStreamingMode`, sets bearer authorization, and applies 8 s connect/read safeguards.
 The receiver-facing completion callback has an 8.5 s overall deadline; if that expires, delivery
-is logged as unknown while the transport finishes unwinding.
-then logs `SEND OK [WhatsApp] → {recipient} (HTTP {code})` or the matching `SEND FAILED` with the
-Meta `error.{code,type,message}` summary. The access token never appears in logs.
+is logged as unknown while the transport finishes unwinding. The channel then logs
+`SEND OK [WhatsApp] → {recipient} (HTTP {code})` or the matching `SEND FAILED` with the Meta
+`error.{code,type,message}` summary. The access token never appears in logs.
 
-**Telegram channel** (`util/TelegramChannel.kt`): sibling `object` on a cached `tg-sender`
-daemon executor with the same timeout behavior.
-POSTs `chat_id`+`text` (web previews disabled) to `https://api.telegram.org/bot{token}/sendMessage`
-(token URL-encoded), logs `SEND OK/FAILED [Telegram]` with the Telegram `error_code`+`description`
-summary. The bot token never appears in logs.
+**Telegram channel** (`util/TelegramChannel.kt`): sibling `object` on a cached `tg-sender` daemon
+executor with the same timeout behavior. It POSTs `chat_id`+`text` (web previews disabled) to
+`https://api.telegram.org/bot{token}/sendMessage` (token URL-encoded), logs
+`SEND OK/FAILED [Telegram]` with the Telegram `error_code`+`description` summary. The bot token never
+appears in logs.
 
 **SMS channel** (`util/SmsChannel.kt`): re-sends through the device modem via
 `SmsManager.sendMultipartTextMessage` (obtained with `getSystemService(SmsManager::class.java)`,
@@ -156,17 +156,17 @@ Commands are exactly `TOKEN:BASE64URL_VALUE:BASE64URL_HMAC`, where TOKEN is `MCS
 (literal sender), `MCSMSSR` (sender full-string RegEx), or `MCSMSMR` (message RegEx). Base64URL is
 canonical and unpadded; the UTF-8 value and 256-bit HMAC tag are encoded separately. The shared
 256-bit key uses the same 43-character encoding. HMAC-SHA256 covers the exact
-`TOKEN:BASE64URL_VALUE` text. There is deliberately
-no sender restriction, version, timestamp, sequence, command ID, or replay protection. Any message
-beginning with a reserved token is consumed before normal filters, even when the separator or
-remaining syntax is malformed, and is never logged/forwarded verbatim. Every reserved
-message received while control is operational gets a generic acknowledgment through all
-operational channels, including malformed, invalid-HMAC, and duplicate commands; this accepted
-behavior permits unauthenticated acknowledgment traffic/cost. Acknowledgments ignore the master
-switch, never increment stats, and contain no rule/key data. Successful commands use the existing
-mode-aware/phone-aware sender merge or exact message-RegEx merge. `tools/New-RemoteRuleSms.ps1`
-uses either `-GenerateKey` or `-RuleType LiteralSender|SenderRegex|MessageRegex`, prints by default,
-and supports `-CopyToClipboard` (alias `-Copy`) and `-OutputPath` in both modes.
+`TOKEN:BASE64URL_VALUE` text. There is deliberately no sender restriction, version, timestamp,
+sequence, command ID, or replay protection. Any message beginning with a reserved token is
+consumed before normal filters, even when the separator or remaining syntax is malformed, and is
+never logged/forwarded verbatim. Every reserved message received while control is operational gets
+a generic acknowledgment through all operational channels, including malformed, invalid-HMAC, and
+duplicate commands; this accepted behavior permits unauthenticated acknowledgment traffic/cost.
+Acknowledgments ignore the master switch, never increment stats, and contain no rule/key data.
+Successful commands use the existing mode-aware/phone-aware sender merge or exact message-RegEx
+merge. `tools/New-RemoteRuleSms.ps1` uses either `-GenerateKey` or
+`-RuleType LiteralSender|SenderRegex|MessageRegex`, prints by default, and supports
+`-CopyToClipboard` (alias `-Copy`) and `-OutputPath` in both modes.
 Command mode writes its GSM-7 character/segment estimate to the host and emits a warning for
 multipart commands without contaminating the generated command's success-stream output.
 `FilterRuleMutationCoordinator` serializes remote additions, provisioning merges, and manual
@@ -205,21 +205,20 @@ detection around ShortcutBadger; rely on its launcher selection and accept a no-
 
 **Persistence**: non-secret state uses a single `SharedPreferences` file named `mc_sms_fwd_wa`;
 the WhatsApp token, Telegram token, and remote-SMS HMAC key use the separate encrypted store
-described below. There is no database. Lists
-(sender values, sender RegEx flags, message regexes) are parallel/newline-delimited strings. Logs use a
-`timestamp\x1Fmessage` format with auto-pruning (35 days / 2000 entries); `LogUtils.addToLog`
-collapses CR/LF/`\x1F` runs in the message to a space so multi-line bodies can't corrupt the
-line-oriented format. WhatsApp credentials live under keys defined in `WhatsAppConfig`:
-`waPhoneNumberId`, `waRecipient`, `waEnabled` (default true). The WhatsApp API template is fixed in
-code (see the WhatsApp channel above); the separate shared forwarding template uses
-`forwardTemplate`. Telegram: `tgEnabled` (default false), `tgChatId` (`TelegramConfig`). SMS:
-`smsEnabled` (default false) and
-`forwardTo` — the destination number (`SmsConfig`). **Secrets (the WhatsApp access token
-`waAccessToken`, Telegram bot token `tgBotToken`, and remote HMAC key `remoteSmsHmacKey`) are NOT in
-this file** — `SecureStore` encrypts them with AES/GCM using a key held by Android Keystore, then
-stores the ciphertext in the private `mc_sms_fwd_secure` preferences file. Configs read secrets by calling
-`SecureStore.read(context, …)`, so `WhatsAppConfig.load`/`TelegramConfig.load` take a `Context`
-(not a `SharedPreferences`).
+described below. There is no database. Lists (sender values, sender RegEx flags, message regexes) are
+parallel/newline-delimited strings. Logs use a `timestamp\x1Fmessage` format with auto-pruning (35
+days / 2000 entries); `LogUtils.addToLog` collapses CR/LF/`\x1F` runs in the message to a space so
+multi-line bodies can't corrupt the line-oriented format. WhatsApp credentials live under keys
+defined in `WhatsAppConfig`: `waPhoneNumberId`, `waRecipient`, `waEnabled` (default true). The
+WhatsApp API template is fixed in code (see the WhatsApp channel above); the separate shared
+forwarding template uses `forwardTemplate`. Telegram: `tgEnabled` (default false), `tgChatId`
+(`TelegramConfig`). SMS:
+`smsEnabled` (default false) and `forwardTo` — the destination number (`SmsConfig`). **Secrets (the
+WhatsApp access token `waAccessToken`, Telegram bot token `tgBotToken`, and remote HMAC key
+`remoteSmsHmacKey`) are NOT in this file** — `SecureStore` encrypts them with AES/GCM using a key
+held by Android Keystore, then stores the ciphertext in the private `mc_sms_fwd_secure` preferences
+file. Configs read secrets by calling `SecureStore.read(context, …)`, so
+`WhatsAppConfig.load`/`TelegramConfig.load` take a `Context` (not a `SharedPreferences`).
 Lifetime forward-stat keys remain in the normal preferences file. The transient
 `fwd_unseen_count` lives separately in `mc_sms_fwd_badge`, which is excluded from cloud backup and
 device transfer so a badge is never restored onto another device.
@@ -231,13 +230,12 @@ in one file, prompts securely by default, refuses repository-local inputs/output
 generates a QR locally through pinned `qrcode` 1.5.4, and encrypts a versioned JSON payload using
 PBKDF2-HMAC-SHA256 plus AES-256-GCM. It can carry the master switch, WhatsApp, Telegram, SMS,
 remote SMS command configuration, allowed senders, regex rules, and the shared forwarding
-template. `ProvisioningBundle` bounds and
-validates the envelope before decrypting, writes secrets through `SecureStore.writeAll`, and writes
-only supplied scalar fields to the normal preferences. Sender/rule lists are merge-only:
-existing entries are never deleted or reordered, sender duplicates are mode-aware (plus
-phone-equivalence for literal numbers), and message-regex duplicates use exact equality.
-`{ "value": "...", "regex": true|false }` objects carry sender rules; implicit string entries are
-rejected. Reapplying a bundle is idempotent. Imports never log or retain
+template. `ProvisioningBundle` bounds and validates the envelope before decrypting, writes secrets
+through `SecureStore.writeAll`, and writes only supplied scalar fields to the normal preferences.
+Sender/rule lists are merge-only: existing entries are never deleted or reordered, sender
+duplicates are mode-aware (plus phone-equivalence for literal numbers), and message-regex
+duplicates use exact equality. `{ "value": "...", "regex": true|false }` objects carry sender rules;
+implicit string entries are rejected. Reapplying a bundle is idempotent. Imports never log or retain
 secrets, and manual edits remain available afterward. Applying a bundle first disables the master
 switch and included channels/control features, commits the public fields, commits encrypted
 secrets, and only then restores the requested enabled states; rollback restores the prior snapshot,
@@ -304,17 +302,17 @@ without saving them.
 
 ## Emulator test protocol
 
-Real, temporary WhatsApp and Telegram credentials may be used for emulator functional testing
-when the user has placed them in
-`C:\Projects\MCSMSForwarderMultiChannelTemp\shortlived.json`. The expected JSON keys are
-`waPhoneNumberId`, `waAccessToken`, `waRecipient`, `tgBotToken`, and `tgChatId`.
+Real, temporary WhatsApp and Telegram credentials may be used for emulator functional testing when
+the user has placed them in `C:\Projects\MCSMSForwarderMultiChannel\temp\shortlived.json`. The
+expected JSON keys are `waPhoneNumberId`, `waAccessToken`, `waRecipient`, `tgBotToken`, and `tgChatId`.
 
 - The credential file is user-managed, read-only session material. Automation must never modify or
   delete it; the user deletes it at the end of the development session. It may be reused by
   multiple sequential tests.
-- Before reading it, verify its resolved path is outside every Git checkout/worktree and outside
-  Copilot session/artifact storage. Never call a viewing tool on it, print it, place it in chat,
-  copy it into the repository, or expose values in command text/output.
+- Before reading it, verify its resolved path is exactly the credential path above, that `/temp/`
+  remains ignored by Git, and that the file is not tracked. Never call a viewing tool on it, print
+  it, place it in chat, copy it elsewhere in the repository, or expose values in command
+  text/output.
 - Load the JSON only inside a local PowerShell process with output suppressed. Use ADB to focus and
   populate the real Compose fields, then tap **Save**, so tokens follow the production
   `SecureStore`/Android Keystore path. Do not add debug importers, BuildConfig secrets, resources,
