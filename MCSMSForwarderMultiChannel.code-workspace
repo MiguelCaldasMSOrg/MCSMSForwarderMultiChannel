@@ -4,27 +4,5 @@
 			"path": "."
 		}
 	],
-	"settings": {
-		"chat.tools.terminal.autoApprove": {
-			".\\gradlew.bat": true,
-			"gh": true,
-			"Test-Path": true,
-			"git config": true,
-			"git init": true,
-			"git add": true,
-			"git commit": true,
-			"git remote": true,
-			"git mv": true,
-			"git -C c:\\Projects\\MCSMSForwarderMultiChannel": true,
-			"Set-Content": true,
-			"git push": true,
-			"Get-Command": true,
-			"adb": true,
-			"&": true,
-			"ForEach-Object": true,
-			"Rename-Item": true,
-			"Copy-Item": true,
-			"emulator": true
-		}
-	}
+	"settings": {}
 }
