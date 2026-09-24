@@ -85,7 +85,7 @@ object WhatsAppCloudChannel {
         val payload = buildPayload(config, body).toString().toByteArray(Charsets.UTF_8)
         val headers = mapOf("Authorization" to "Bearer ${config.accessToken}")
         val result = HttpJsonClient.postJson(url, payload, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, headers)
-        val summary = if (result.success) null else summarizeError(result.errorBody)
+        val summary = if (result.success) null else summarizeError(result.errorBody, config.accessToken)
         return Outcome(result.statusCode, result.success, summary)
     }
 
@@ -107,16 +107,16 @@ object WhatsAppCloudChannel {
             .put("template", template)
     }
 
-    private fun summarizeError(raw: String): String {
+    internal fun summarizeError(raw: String, secret: String): String {
         if (raw.isBlank()) {
             return ""
         }
         return runCatching {
-            val err = JSONObject(raw).optJSONObject("error") ?: return raw.take(180)
+            val err = JSONObject(raw).optJSONObject("error") ?: return redactSecret(raw, secret).take(180)
             val code = err.optInt("code", -1)
             val type = err.optString("type")
             val msg = err.optString("message")
-            buildString {
+            val summary = buildString {
                 if (code != -1) {
                     append("code=").append(code).append(' ')
                 }
@@ -126,7 +126,10 @@ object WhatsAppCloudChannel {
                 if (msg.isNotEmpty()) {
                     append("msg=").append(msg)
                 }
-            }.trim().take(240)
-        }.getOrElse { raw.take(180) }
+            }.trim()
+            redactSecret(summary, secret).take(240)
+        }.getOrElse {
+            redactSecret(raw, secret).take(180)
+        }
     }
 }

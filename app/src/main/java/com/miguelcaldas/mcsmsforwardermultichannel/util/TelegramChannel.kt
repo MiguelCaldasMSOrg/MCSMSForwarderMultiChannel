@@ -90,11 +90,11 @@ object TelegramChannel {
             .toString()
             .toByteArray(Charsets.UTF_8)
         val result = HttpJsonClient.postJson(url, payload, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS)
-        val summary = if (result.success) null else summarizeError(result.errorBody)
+        val summary = if (result.success) null else summarizeError(result.errorBody, config.botToken)
         return Outcome(result.statusCode, result.success, summary)
     }
 
-    private fun summarizeError(raw: String): String {
+    internal fun summarizeError(raw: String, secret: String): String {
         if (raw.isBlank()) {
             return ""
         }
@@ -102,14 +102,17 @@ object TelegramChannel {
             val obj = JSONObject(raw)
             val code = obj.optInt("error_code", -1)
             val desc = obj.optString("description")
-            buildString {
+            val summary = buildString {
                 if (code != -1) {
                     append("code=").append(code).append(' ')
                 }
                 if (desc.isNotEmpty()) {
                     append("desc=").append(desc)
                 }
-            }.trim().take(240)
-        }.getOrElse { raw.take(180) }
+            }.trim()
+            redactSecret(summary, secret).take(240)
+        }.getOrElse {
+            redactSecret(raw, secret).take(180)
+        }
     }
 }

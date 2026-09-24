@@ -295,7 +295,7 @@ private fun HealthSection(blockers: List<HealthItem>, onFix: (HealthAction) -> U
             )
             blockers.forEach { item ->
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(

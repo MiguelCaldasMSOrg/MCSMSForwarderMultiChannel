@@ -1,12 +1,13 @@
 name: Publish release
-run-name: Publish release ${{ github.ref_name }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && 'Validate release' || 'Publish release' }} ${{ github.ref_name }}
 
-# A SemVer tag builds, signs, verifies, and publishes the corresponding APK.
+# Manual runs validate signed APKs; only a SemVer tag publishes a release.
 
 on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -23,8 +24,8 @@ jobs:
       ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
       ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
     steps:
-      - name: Checkout tagged source
-        uses: actions/checkout@v7
+      - name: Checkout source
+        uses: actions/checkout@v7.0.1
 
       - name: Validate release version and signing credentials
         env:
@@ -37,30 +38,39 @@ jobs:
             echo "Could not read versionName/versionCode from app/build.gradle.kts" >&2
             exit 1
           fi
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Tag '$GITHUB_REF_NAME' must use vMAJOR.MINOR.PATCH format" >&2
-            exit 1
-          fi
-          tag_version="${GITHUB_REF_NAME#v}"
-          if [[ "$tag_version" != "$version_name" ]]; then
-            echo "Tag version '$tag_version' must match Android versionName '$version_name'" >&2
-            exit 1
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Tag '$GITHUB_REF_NAME' must use vMAJOR.MINOR.PATCH format" >&2
+              exit 1
+            fi
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [[ "$tag_version" != "$version_name" ]]; then
+              echo "Tag version '$tag_version' must match Android versionName '$version_name'" >&2
+              exit 1
+            fi
           fi
           if [[ -z "$RELEASE_KEYSTORE_BASE64" || -z "$ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PASSWORD" || -z "$ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS" || -z "$ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD" ]]; then
             echo "One or more release signing secrets are missing" >&2
             exit 1
           fi
 
-          echo "Publishing Android version $version_name (code $version_code)"
+          echo "Validating Android version $version_name (code $version_code)"
 
       - name: Set up Java
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v6.0.1
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.3.0
+
+      - name: Verify JDK 25 runtime
+        run: |
+          java -version
+          ./gradlew --version
+          java_version=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^[[:space:]]*java.specification.version = //p')
+          test "$java_version" = "25"
 
       - name: Restore signing keystore
         env:
@@ -77,7 +87,7 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest :app:lint :app:assembleRelease :app:assembleMinifiedRelease --no-daemon
 
       - name: Upload private R8 diagnostics
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: r8-mapping-${{ github.ref_name }}
           path: app/build/outputs/mapping/minifiedRelease/
@@ -105,7 +115,7 @@ jobs:
           sha256sum MC.SMS.Forwarder.minified.apk > MC.SMS.Forwarder.minified.apk.sha256
 
       - name: Upload verified release assets
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-${{ github.ref_name }}
           path: |
@@ -119,12 +129,13 @@ jobs:
   publish-artifacts:
     name: Publish GitHub release assets
     needs: build-release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Download verified release assets
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.1
         with:
           name: release-${{ github.ref_name }}
           path: release-assets

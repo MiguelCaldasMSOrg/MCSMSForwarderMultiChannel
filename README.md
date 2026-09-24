@@ -74,13 +74,27 @@ The command must return `True`. Android may also warn that the APK comes from ou
 .\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
 ```
 
+Gradle runs on JDK 25 locally and in release CI, pinned by
+`gradle/gradle-daemon-jvm.properties`. Java and Kotlin bytecode continue to target Java 17 for
+Android compatibility.
+
 `compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), and Navigation 2.10.0.
 
 Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`). No keystore is committed.
 
 ### Publishing a release
 
-The [Publish Android release workflow](.github/workflows/publish-android-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests, builds and verifies the signed APK, generates its SHA-256 checksum, and publishes both files as native GitHub Release assets. The stable links above automatically follow the latest release.
+The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests and lint, builds and verifies both signed APK variants, generates their SHA-256 checksums, and publishes the release assets. The stable links above automatically follow the latest release.
+
+Before tagging, run the same signed-build validation on GitHub without publishing a release:
+
+```powershell
+gh workflow run publish-release.yml --ref master
+```
+
+The manual run verifies JDK 25, runs tests and lint, signs both APK variants, and uploads verified
+artifacts. The publishing job is skipped for manual runs; only version-tag pushes can create a
+GitHub Release. Both workflows pin their Actions steps to exact stable release versions.
 
 Configure these encrypted repository secrets once under **Settings → Secrets and variables → Actions**:
 

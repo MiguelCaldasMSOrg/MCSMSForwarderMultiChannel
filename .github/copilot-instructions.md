@@ -28,9 +28,10 @@ readiness, concurrency/deadline behavior, build metadata, authenticated remote-S
 parsing/merging, and encrypted provisioning (including PowerShell interoperability). No
 instrumentation suite is configured; use Gradle lint for Android static checks.
 
-The build uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
-`targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00
-(Material 3 follows the BOM), Navigation 2.10, Google Code Scanner 16.1, and ShortcutBadger 1.1.22.
+The build runs Gradle on JDK 25 locally and in release CI while Java and Kotlin bytecode continue
+to target Java 17. It uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
+`targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00 (Material 3 follows the
+BOM), Navigation 2.10, Google Code Scanner 16.1, and ShortcutBadger 1.1.22.
 Gradle's per-variant `GenerateBuildMetadataTask` generates `GeneratedBuildMetadata` at task
 execution; local builds use the current time and Git `HEAD` (`-dirty` when applicable), while
 `BUILD_TIMESTAMP_EPOCH_MILLIS`/`BUILD_SOURCE_REVISION` overrides support deterministic builds.
