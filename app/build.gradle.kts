@@ -110,8 +110,8 @@ android {
         applicationId = "com.miguelcaldas.mcsmsforwardermultichannel"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 16
-        versionName = "1.0.16"
+        versionCode = 17
+        versionName = "1.0.17"
     }
 
     signingConfigs {
