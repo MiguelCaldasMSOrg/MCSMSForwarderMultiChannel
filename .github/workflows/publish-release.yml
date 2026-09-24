@@ -60,17 +60,17 @@ jobs:
         uses: actions/setup-java@v6.0.1
         with:
           distribution: temurin
-          java-version: "25"
+          java-version: "26"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6.3.0
 
-      - name: Verify JDK 25 runtime
+      - name: Verify JDK 26 runtime
         run: |
           java -version
           ./gradlew --version
           java_version=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^[[:space:]]*java.specification.version = //p')
-          test "$java_version" = "25"
+          test "$java_version" = "26"
 
       - name: Restore signing keystore
         env:

@@ -74,9 +74,9 @@ The command must return `True`. Android may also warn that the APK comes from ou
 .\gradlew.bat :app:testDebugUnitTest       # run JVM unit tests
 ```
 
-Gradle runs on JDK 25 locally and in release CI, pinned by
+Gradle runs on JDK 26 locally and in release CI, pinned by
 `gradle/gradle-daemon-jvm.properties`. Java and Kotlin bytecode continue to target Java 17 for
-Android compatibility.
+Android compatibility. Install JDK 26 before building locally; it is a non-LTS release.
 
 `compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), and Navigation 2.10.0.
 
@@ -92,7 +92,7 @@ Before tagging, run the same signed-build validation on GitHub without publishin
 gh workflow run publish-release.yml --ref master
 ```
 
-The manual run verifies JDK 25, runs tests and lint, signs both APK variants, and uploads verified
+The manual run verifies JDK 26, runs tests and lint, signs both APK variants, and uploads verified
 artifacts. The publishing job is skipped for manual runs; only version-tag pushes can create a
 GitHub Release. Both workflows pin their Actions steps to exact stable release versions.
 
