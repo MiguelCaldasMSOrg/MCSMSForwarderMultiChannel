@@ -164,7 +164,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: [30, 31, 32, 33, 34, 35, 36, 37]
+        api-level: [30]
         variant: [regular, minified]
     steps:
       - name: Checkout test driver

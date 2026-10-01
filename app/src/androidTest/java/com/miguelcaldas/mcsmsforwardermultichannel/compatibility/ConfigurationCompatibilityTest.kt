@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
+import android.os.Debug
 import java.lang.reflect.Proxy
 import java.util.concurrent.atomic.AtomicInteger
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -35,6 +36,23 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class ConfigurationCompatibilityTest: DeviceTestBase() {
+    @Test
+    fun unicodeProvisioningMatchesPowerShellWithoutNativeHeapGrowth() {
+        val bundle = fixture("powershell-provisioning-unicode-v1.json")
+        val passphrase = "v\u00e1lida-passphrase-\uD83D\uDD10-123".toCharArray()
+        val nativeHeapBefore = Debug.getNativeHeapAllocatedSize()
+        try {
+            repeat(4) {
+                val configuration = ProvisioningBundle.decrypt(bundle, passphrase)
+                assertEquals("fake-wa-token-for-tests", configuration.whatsApp?.accessToken)
+                assertEquals("123456:fake-telegram-token", configuration.telegram?.botToken)
+                assertTrue("PBKDF2 retained excessive native heap", Debug.getNativeHeapAllocatedSize() - nativeHeapBefore < 64L * 1024 * 1024)
+            }
+        } finally {
+            passphrase.fill('\u0000')
+        }
+    }
+
     @Test
     @SuppressLint("UseKtx")
     fun legacyLogMigrationAndClearKeepTheExistingContents() {

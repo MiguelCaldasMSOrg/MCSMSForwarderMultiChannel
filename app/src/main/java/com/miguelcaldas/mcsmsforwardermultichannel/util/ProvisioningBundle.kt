@@ -12,8 +12,9 @@ import java.security.ProviderException
 import java.util.Base64
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
-import javax.crypto.Mac
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 internal data class ProvisionedWhatsApp(
@@ -356,36 +357,14 @@ internal object ProvisioningBundle {
     }
 
     private fun deriveKey(passphrase: CharArray, salt: ByteArray, iterations: Int): ByteArray {
-        val passwordBytes = utf8Bytes(passphrase)
-        val input = salt + byteArrayOf(0, 0, 0, 1)
-        var previous = ByteArray(32)
-        var current = ByteArray(32)
-        val derivedKey = ByteArray(KEY_BITS / Byte.SIZE_BITS)
+        utf8Bytes(passphrase).fill(0)
+        val keySpec = PBEKeySpec(passphrase, salt, iterations, KEY_BITS)
         return try {
-            val mac = Mac.getInstance("HmacSHA256")
-            mac.init(SecretKeySpec(passwordBytes, "HmacSHA256"))
-            mac.update(input)
-            mac.doFinal(previous, 0)
-            previous.copyInto(derivedKey)
-            repeat(iterations - 1) {
-                mac.update(previous)
-                mac.doFinal(current, 0)
-                for (index in derivedKey.indices) {
-                    derivedKey[index] = (derivedKey[index].toInt() xor current[index].toInt()).toByte()
-                }
-                val swap = previous
-                previous = current
-                current = swap
-            }
-            derivedKey
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(keySpec).encoded
         } catch (error: GeneralSecurityException) {
-            derivedKey.fill(0)
             throw ProvisioningException("Android could not derive the configuration encryption key.", error)
         } finally {
-            passwordBytes.fill(0)
-            input.fill(0)
-            previous.fill(0)
-            current.fill(0)
+            keySpec.clearPassword()
         }
     }
 

@@ -86,7 +86,9 @@ Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEA
 
 ### Publishing a release
 
-The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests and lint, builds and verifies both signed APK variants, and gates publication on the API 30-37 emulator regression matrix. Regular releases receive internal platform/configuration tests; both regular and minified APKs receive isolated UI tests against the exact staged binaries. It publishes the APKs, SHA-256 checksums, and minified mapping only after all required jobs pass. The stable links above automatically follow the latest release.
+The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests and lint, builds and verifies both signed APK variants, and gates publication on API 30 emulator tests for regular and minified APKs (two device jobs). Regular releases receive internal platform/configuration tests; both regular and minified APKs receive isolated UI tests against the exact staged binaries. It publishes the APKs, SHA-256 checksums, and minified mapping only after all required jobs pass. The stable links above automatically follow the latest release.
+
+API-30-only device testing is an explicit owner decision dated 2026-10-01 for this small fleet, voluntarily reducing the former API 30-37 coverage. Android 11+ support and all SDK/build settings remain unchanged; passing API 30 does not validate newer Android-specific behavior. The [coverage decision, accepted gaps, and recovery steps](docs/android-compatibility.md#voluntary-coverage-reduction-2026-10-01) preserve the path to restoring wider tests later.
 
 Before tagging, run the same signed-build validation on GitHub without publishing a release:
 
@@ -95,8 +97,8 @@ gh workflow run publish-release.yml --ref master
 ```
 
 The manual run verifies JDK 26, runs JVM tests and lint, signs both APK variants, and uploads verified
-artifacts. The full emulator matrix and publishing job are skipped for manual runs; only new
-version-tag pushes run the platform matrix and can create a GitHub Release. Ordinary pushes and
+artifacts. The API 30 device tests and publishing job are skipped for manual runs; only new
+version-tag pushes run those device tests and can create a GitHub Release. Ordinary pushes and
 pull requests do not trigger it. Both workflows pin their Actions steps to exact stable release versions.
 
 Configure these encrypted repository secrets once under **Settings → Secrets and variables → Actions**:

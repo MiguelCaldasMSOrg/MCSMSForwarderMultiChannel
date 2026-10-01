@@ -27,10 +27,13 @@ Focused JVM tests cover filtering/normalization, sender rules, log classificatio
 readiness, concurrency/deadline behavior, build metadata, authenticated remote-SMS command
 parsing/merging, and encrypted provisioning (including PowerShell interoperability). Emulator-only
 `app/src/androidTest` checks cover platform/configuration behavior on regular builds; `device-tests`
-is a self-instrumenting black-box UI driver for both regular and minified APKs. The full API 30-37
-matrix runs ONLY for new release-tag pushes, never ordinary pushes, PRs, schedules, or manual
-preflight. Focused local checks are allowed. See `docs/android-compatibility.md` for coverage,
-limitations, and the compatibility-code retirement checklist.
+is a self-instrumenting black-box UI driver for both regular and minified APKs. By explicit owner
+decision on 2026-10-01, release device tests cover ONLY API 30, for both APKs; the previous API 30-37
+matrix is intentionally reduced for this small fleet. Device tests still run ONLY for new release-tag
+pushes, never ordinary pushes, PRs, schedules, or manual preflight. Do not re-expand the matrix
+without approval. Android 11+ support, SDK targets, JVM tests, lint, and both APK builds are unchanged.
+Focused local checks are allowed. See `docs/android-compatibility.md` for accepted coverage gaps,
+the wider-matrix recovery steps, and the compatibility-code retirement checklist.
 
 The build runs Gradle on JDK 26 locally and in release CI while Java and Kotlin bytecode continue
 to target Java 17. It uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
@@ -250,6 +253,9 @@ PBKDF2-HMAC-SHA256 plus AES-256-GCM. It can carry the master switch, WhatsApp, T
 remote SMS command configuration, allowed senders, regex rules, and the shared forwarding
 template. `ProvisioningBundle` bounds and validates the envelope before decrypting, writes secrets
 through `SecureStore.writeAll`, and writes only supplied scalar fields to the normal preferences.
+Its PBKDF2 uses platform `SecretKeyFactory` with `PBKDF2WithHmacSHA256` after strict UTF-8 validation;
+do not restore a Java-level per-iteration `Mac` reset loop, which caused native-heap exhaustion on
+Android 11. JVM and device tests retain PowerShell Unicode interoperability coverage.
 Sender/rule lists are merge-only: existing entries are never deleted or reordered, sender
 duplicates are mode-aware (plus phone-equivalence for literal numbers), and message-regex
 duplicates use exact equality. `{ "value": "...", "regex": true|false }` objects carry sender rules;

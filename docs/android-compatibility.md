@@ -20,13 +20,13 @@ The previous published v1.0.17 APKs still require API 33; see [the unchanged-APK
 | [StatusViewModel](../app/src/main/java/com/miguelcaldas/mcsmsforwardermultichannel/ui/status/StatusViewModel.kt) notification availability branch and `OPEN_NOTIFICATION_SETTINGS` action in [StatusScreen](../app/src/main/java/com/miguelcaldas/mcsmsforwardermultichannel/ui/status/StatusScreen.kt) | Android 11/12 have no `POST_NOTIFICATIONS` prompt. Check notification availability and open app notification settings, with app-settings fallback. Android 13+ retains its explicit permission request. | Minimum API 33 |
 | `ContextCompat.registerReceiver(..., RECEIVER_NOT_EXPORTED)` in [SmsChannel](../app/src/main/java/com/miguelcaldas/mcsmsforwardermultichannel/util/SmsChannel.kt) | Preserves private SMS-result broadcasts on Android 11/12 using AndroidX's compatibility implementation. | Native equivalent available at API 33; keeping AndroidX remains valid |
 
-The phone policy was checked against [Android 12's implementation](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-12.0.0_r1/telephony/java/android/telephony/PhoneNumberUtils.java). Bundled numbering metadata can differ from a device's platform metadata; representative cross-version parity checks are part of release testing. This is not a promise of identical metadata across every OS/OEM image.
+The phone policy was checked against [Android 12's implementation](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-12.0.0_r1/telephony/java/android/telephony/PhoneNumberUtils.java). Bundled numbering metadata can differ from a device's platform metadata. Representative cross-version parity checks remain in the test suite, but the API-30-only release gate does not exercise their API 31+ native comparison branch. This is not a promise of identical metadata across every OS/OEM image.
 
 ## Removing Android 11
 
 When every supported device runs Android 12 or newer:
 
-1. Raise the catalog minimum to 31 and remove API 30 from the release matrix.
+1. Raise the catalog minimum to 31 and replace the API 30 release-test entry with API 31; never leave the release gate without a device entry.
 2. Replace `PhoneNumberCompat.areSame` calls with the platform comparison, then remove the adapter, `libphonenumber` dependency/version, and Android-11-only tests. Do not remove general sender/loop-guard tests.
 3. Replace `defaultSmsManager` with the native service lookup and remove its deprecation suppression.
 4. Remove only the SDK guard around dynamic colors. Keep the static palettes because disabling dynamic color still uses them.
@@ -38,7 +38,7 @@ When every supported device runs Android 12 or newer:
 
 When every supported device runs Android 13 or newer:
 
-1. Complete the Android 11 retirement steps, raise the minimum to 33, and remove API 31/32 from the release matrix.
+1. Complete the Android 11 retirement steps, raise the minimum to 33, and replace older release-test entries with API 33 (or retain newer entries if wider coverage has been restored).
 2. Remove the pre-33 notification-availability/settings branch and the now-unused health action. Keep permission-denial recovery and readiness checks.
 3. Optionally replace the AndroidX receiver registration with the native non-exported registration. Never make SMS result broadcasts public.
 4. Retain the test driver and general release regression tests; they are not legacy support code.
@@ -47,7 +47,24 @@ Neither retirement requires changing the application ID, signing key, preference
 
 ## Test And Release Policy
 
-The full API 30-37 matrix, for both regular and minified release APKs, runs only on new validated version-tag pushes in [publish-release.yml](../.github/workflows/publish-release.yml). Ordinary pushes, pull requests, schedules, and manual preflight do not start that matrix. Publication depends on all matrix jobs succeeding. Failed/skipped/zero-test instrumentation output cannot be reported as a successful run. API 37 uses the official `android-37.0` image/package naming; the test driver still asserts device API 37.
+The release device matrix is **API 30 only**, for both regular and minified release APKs: two device jobs, not separate per-API builds. It runs only on new validated version-tag pushes in [publish-release.yml](../.github/workflows/publish-release.yml). Ordinary pushes, pull requests, schedules, and manual preflight do not start it. Publication still depends on both device jobs succeeding. Failed/skipped/zero-test instrumentation output cannot be reported as a successful run.
+
+### Voluntary Coverage Reduction (2026-10-01)
+
+The owner explicitly chose API-30-only device testing because the earlier API 30-37 matrix (16 jobs across the two APKs) was excessive for the intended small phone fleet. This is an intentional, reversible reduction in automated test coverage, not a reduction in Android 11+ support. `minSdk=30`, `compileSdk=37`, `targetSdk=36`, both APK variants, JVM tests, lint, signing checks, and the release-only publication gate remain unchanged.
+
+Accepted gaps: release CI no longer exercises Android 12+ native phone comparison, SMS-service lookup, and dynamic colors; Android 13+ notification-permission behavior; or later OS-specific runtime/install/background restrictions. An API 30 pass must not be described as validation of API 31-37. Existing cross-version tests and compatibility code are retained for later use. No automatic re-expansion is authorized.
+
+### Restoring Wider Coverage
+
+1. Obtain approval for the required OS coverage; restore selected API levels or the former `api-level: [30, 31, 32, 33, 34, 35, 36, 37]` in `release-device-tests.strategy.matrix`. Keep `variant: [regular, minified]`.
+2. Verify official image availability and emulator storage/boot prerequisites. The workflow retains the API 37 to `37.0` package-name mapping; the device script must continue asserting the integer device API. The [initial wider-matrix run](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/actions/runs/36797425110) failed and blocked publication, including API 37 installation failures due to insufficient emulator storage; it is diagnostic history, not a successful wider baseline.
+3. Keep the exact-APK staging, both test layers, rejection of failed/skipped/empty runs, and publication dependencies. Resolve any remaining test/device failures rather than skipping their assertions.
+4. Update this guide, the README, and repository instructions to reflect the newly approved coverage. Run the wider matrix on the next new release tag only; do not enable it for ordinary pushes, PRs, schedules, or manual preflight.
+
+### Retained Checks
+
+CI retains a 2 GiB emulator guest. The initial API 30 regular job was killed by the guest kernel during provisioning tests, with about 1.3 GiB app-process RSS. The corrective implementation uses platform `PBKDF2WithHmacSHA256` rather than repeated Java-level HMAC resets, retaining the bundle format, work factor, strict Unicode validation, and interoperability fixtures. The API 30 job must pass without weakening its assertions or increasing guest memory to hide this failure.
 
 The build job captures one timestamp and source revision, stages the signed application APKs and matching tests, and publishes those same application files only after testing. Test APKs are private short-lived workflow artifacts, not GitHub release assets. Each minified release retains its exact mapping and checksum assets.
 
@@ -60,7 +77,7 @@ An in-process runner against an optimized APK proved unsuitable: shared dependen
 
 Device tests refuse physical hardware and clear the test application on their disposable emulator. Fixtures are synthetic. They do not use the protected credential file, real provider credentials, or real carrier sends.
 
-Focused local development checks remain allowed. Run JVM tests with the default test configuration; select the regular-release instrumentation configuration in a separate invocation:
+Focused local development checks remain allowed. UI automation must match CI's `disable-animations: true` setting on the disposable emulator; enabled animations can invalidate accessibility nodes during navigation. Run JVM tests with the default test configuration; select the regular-release instrumentation configuration in a separate invocation:
 
 ```powershell
 .\gradlew.bat :app:testDebugUnitTest :app:lint :app:assembleDebug :app:assembleRelease :app:assembleMinifiedRelease
@@ -68,15 +85,15 @@ Focused local development checks remain allowed. Run JVM tests with the default 
 .\gradlew.bat :device-tests:assembleDebug
 ```
 
-These commands build/check code; they do not start the full device matrix. `androidTestBuildType=minifiedRelease` is intentionally rejected; use the isolated driver for optimized APKs.
+These commands build/check code; they do not start the release device matrix. `androidTestBuildType=minifiedRelease` is intentionally rejected; use the isolated driver for optimized APKs.
 
 ## Verification Limits
 
 The automated matrix is regression coverage, not certification of every hardware/service behavior. It does not validate live WhatsApp/Telegram delivery, real modem/carrier delivery, Samsung-specific background management/badges, camera QR recognition, or an actual cloud-backup restore. Real-device/provider checks need an explicitly authorized release-time exercise. Do not silently add live-send credentials or make paid sends in CI.
 
-Final v1.0.18 local validation passed 103 JVM tests with zero failures/errors/skips, app lint, debug and both release builds, and isolated-driver compilation. Android 11 passed 12 regular-release platform/configuration tests, including exact-ciphertext rollback and log migration, plus all four black-box UI tests against the fully optimized APK. The new channel-save UI test also passed against the regular release. No live provider credentials or sends were used for these tests. The full multi-platform GitHub matrix is triggered by the new release tag, not local development.
+Final v1.0.18 local validation passed 103 JVM tests with zero failures/errors/skips, app lint, debug and both release builds, and isolated-driver compilation. After the provisioning correction, Android 11 passed 13 regular-release platform/configuration tests, including exact-ciphertext rollback, log migration, and repeated Unicode decryption with a native-heap growth bound, plus all four black-box UI tests against each APK. The corrected minified build, JVM suite, and lint also passed. No live provider credentials or sends were used for these tests. These local results do not turn the failed first GitHub matrix into a pass; the API 30 release jobs must still succeed before publication.
 
-The release workflow provides the authoritative final signed-artifact and cross-platform results. Advisory scans during preparation found no known CVEs in the added runtime/test dependencies, including resolved OkHttp 5.5.0, Okio 3.18.1, and Kotlin stdlib 2.2.21; this is a point-in-time check, not a future security guarantee.
+The release workflow provides the authoritative final signed-artifact and configured API 30 device results, not full cross-platform certification. Advisory scans during preparation found no known CVEs in the added runtime/test dependencies, including resolved OkHttp 5.5.0, Okio 3.18.1, and Kotlin stdlib 2.2.21; this is a point-in-time check, not a future security guarantee.
 
 Before the subsequent transport/logging hardening, compatibility-only APKs measured 26,478,161 bytes regular and 3,405,790 bytes minified. These are historical measurements, not final v1.0.18 sizes; final signed release assets are authoritative.
 
