@@ -5,8 +5,10 @@ import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.PowerManager
 import android.text.format.DateUtils
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardStatsStore
@@ -29,6 +31,7 @@ enum class HealthAction {
     GRANT_RECEIVE_SMS,
     GRANT_SEND_SMS,
     GRANT_NOTIFICATIONS,
+    OPEN_NOTIFICATION_SETTINGS,
     BATTERY_SETTINGS,
     OPEN_CHANNELS,
     OPEN_FILTERS,
@@ -42,12 +45,14 @@ internal fun permissionHealthItems(
     notificationsGranted: Boolean,
     smsEnabled: Boolean,
     sendSmsGranted: Boolean,
+    sdkInt: Int,
 ): List<HealthItem> = buildList {
     if (!receiveSmsGranted) {
         add(HealthItem("Grant SMS receiving", "Grant", HealthAction.GRANT_RECEIVE_SMS))
     }
     if (!notificationsGranted) {
-        add(HealthItem("Allow icon badge count", "Allow", HealthAction.GRANT_NOTIFICATIONS))
+        val action = if (sdkInt >= 33) HealthAction.GRANT_NOTIFICATIONS else HealthAction.OPEN_NOTIFICATION_SETTINGS
+        add(HealthItem("Allow icon badge count", if (sdkInt >= 33) "Allow" else "Settings", action))
     }
     if (smsEnabled && !sendSmsGranted) {
         add(HealthItem("Grant SMS sending", "Grant", HealthAction.GRANT_SEND_SMS))
@@ -142,9 +147,10 @@ class StatusViewModel(application: Application) : AndroidViewModel(application) 
         items.addAll(
             permissionHealthItems(
                 receiveSmsGranted = hasPermission(Manifest.permission.RECEIVE_SMS),
-                notificationsGranted = hasPermission(Manifest.permission.POST_NOTIFICATIONS),
+                notificationsGranted = if (Build.VERSION.SDK_INT >= 33) hasPermission(Manifest.permission.POST_NOTIFICATIONS) else NotificationManagerCompat.from(context).areNotificationsEnabled(),
                 smsEnabled = smsConfig.enabled,
                 sendSmsGranted = hasPermission(Manifest.permission.SEND_SMS),
+                sdkInt = Build.VERSION.SDK_INT,
             ),
         )
         require(powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true, "Exempt from battery optimization", "Settings", HealthAction.BATTERY_SETTINGS)

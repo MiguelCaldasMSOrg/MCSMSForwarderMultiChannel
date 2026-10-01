@@ -110,9 +110,15 @@ android {
         applicationId = "com.miguelcaldas.mcsmsforwardermultichannel"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 17
-        versionName = "1.0.17"
+        versionCode = 18
+        versionName = "1.0.18"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+
+    testBuildType = providers.gradleProperty("androidTestBuildType").getOrElse("debug").also {
+        require(it in setOf("debug", "release")) { "Use device-tests for black-box testing of minifiedRelease" }
+    }
+    sourceSets.getByName("androidTest").assets.srcDir("src/test/resources")
 
     signingConfigs {
         if (hasReleaseSigning) {
@@ -215,7 +221,14 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.play.services.code.scanner)
     implementation(libs.shortcut.badger)
+    implementation(libs.libphonenumber)
+    implementation(libs.okhttp)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
+    testImplementation(libs.mockwebserver)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation(libs.errorprone.annotations)
 }

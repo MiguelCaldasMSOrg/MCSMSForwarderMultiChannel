@@ -13,6 +13,41 @@ import org.junit.Test
 class ConcurrencyTest {
 
     @Test
+    fun boundedExecutorReportsSaturationAndNeverRunsExpiredQueuedWork() {
+        val executor = boundedDaemonExecutor("bounded-test", 1, 1)
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val expired = CountDownLatch(1)
+        val queuedRuns = AtomicInteger()
+        try {
+            executor.execute {
+                started.countDown()
+                release.await()
+            }
+            assertTrue(started.await(1, TimeUnit.SECONDS))
+            assertTrue(executor.executeWithDeadline(50, {
+                queuedRuns.incrementAndGet()
+            }, { result ->
+                assertTrue(result.exceptionOrNull() is TimeoutException)
+                expired.countDown()
+            }))
+            var rejected = false
+            assertFalse(executor.executeWithDeadline(50, { "not admitted" }, { result ->
+                rejected = result.exceptionOrNull() is RejectedExecutionException
+            }))
+            assertTrue(rejected)
+            assertTrue(expired.await(1, TimeUnit.SECONDS))
+            release.countDown()
+            executor.shutdown()
+            assertTrue(executor.awaitTermination(1, TimeUnit.SECONDS))
+            assertEquals(0, queuedRuns.get())
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun overlappingWorkStartsConcurrently() {
         val executor = cachedDaemonExecutor("concurrency-test")
         val started = CountDownLatch(2)
@@ -75,6 +110,39 @@ class ConcurrencyTest {
             assertEquals(1, callbackCount.get())
         } finally {
             release.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun blockingTimeoutCallbackDoesNotDelayAnotherDeadline() {
+        val executor = cachedDaemonExecutor("blocked-callback-test")
+        val releaseWorkers = CountDownLatch(1)
+        val releaseCallback = CountDownLatch(1)
+        val firstCallback = CountDownLatch(1)
+        val secondCallback = CountDownLatch(1)
+
+        try {
+            assertTrue(executor.executeWithDeadline(timeoutMs = 50, block = {
+                releaseWorkers.await()
+                "late"
+            }, onResult = { result ->
+                assertTrue(result.exceptionOrNull() is TimeoutException)
+                firstCallback.countDown()
+                releaseCallback.await()
+            }))
+            assertTrue(firstCallback.await(1, TimeUnit.SECONDS))
+            assertTrue(executor.executeWithDeadline(timeoutMs = 50, block = {
+                releaseWorkers.await()
+                "late"
+            }, onResult = { result ->
+                assertTrue(result.exceptionOrNull() is TimeoutException)
+                secondCallback.countDown()
+            }))
+            assertTrue(secondCallback.await(1, TimeUnit.SECONDS))
+        } finally {
+            releaseCallback.countDown()
+            releaseWorkers.countDown()
             executor.shutdownNow()
         }
     }

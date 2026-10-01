@@ -1,7 +1,6 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.util
 
 import android.content.Context
-import android.telephony.PhoneNumberUtils
 import android.telephony.TelephonyManager
 import java.util.Locale
 
@@ -17,7 +16,7 @@ object SenderMatcher {
                 matchesRegex(rule.value, normalizedSender)
             } else {
                 rule.value == normalizedSender ||
-                    PhoneNumberUtils.areSamePhoneNumber(rule.value, sender, countryIso)
+                    PhoneNumberCompat.areSame(rule.value, sender, countryIso)
             }
         }
     }
@@ -32,7 +31,7 @@ object SenderMatcher {
         if (left.value == right.value) {
             return true
         }
-        return !left.isRegex && PhoneNumberUtils.areSamePhoneNumber(left.value, right.value, countryIso)
+        return !left.isRegex && PhoneNumberCompat.areSame(left.value, right.value, countryIso)
     }
 
     internal fun matchesRegex(pattern: String, normalizedSender: String): Boolean =

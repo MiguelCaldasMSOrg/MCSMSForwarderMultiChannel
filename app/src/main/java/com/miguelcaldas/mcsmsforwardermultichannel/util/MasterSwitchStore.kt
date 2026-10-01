@@ -9,8 +9,10 @@ object MasterSwitchStore {
     fun load(prefs: SharedPreferences): Boolean = prefs.getBoolean(KEY_ENABLED, true)
 
     fun save(prefs: SharedPreferences, enabled: Boolean) {
-        prefs.edit {
-            putBoolean(KEY_ENABLED, enabled)
+        FilterRuleMutationCoordinator.withLock {
+            prefs.edit {
+                putBoolean(KEY_ENABLED, enabled)
+            }
         }
     }
 }

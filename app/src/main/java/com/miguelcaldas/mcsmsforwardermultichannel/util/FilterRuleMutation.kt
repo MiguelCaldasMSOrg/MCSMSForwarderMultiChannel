@@ -1,6 +1,6 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.util
 
-/** Serializes every read/merge/write transaction that can mutate sender or message rules. */
+/** Serializes configuration transactions and forwarding snapshots, including filter mutations. */
 internal object FilterRuleMutationCoordinator {
     private val lock = Any()
 

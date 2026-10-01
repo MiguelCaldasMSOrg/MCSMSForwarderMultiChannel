@@ -3,6 +3,9 @@ package com.miguelcaldas.mcsmsforwardermultichannel.ui.log
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
@@ -11,6 +14,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 
 enum class LogFilter { All, SendOk, SendFailed, FilterRejected, RemoteRules, Boot }
 enum class LogClearState { Idle, Clearing, Failed }
@@ -45,7 +51,8 @@ internal fun matchesLogFilter(entry: String, filter: LogFilter): Boolean = when 
  */
 class LogViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val prefs: SharedPreferences = application.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = application.getSharedPreferences(LogUtils.PREFS, Context.MODE_PRIVATE)
+    private var refreshJob: Job? = null
 
     private val _filter = MutableStateFlow(LogFilter.All)
     val filter: StateFlow<LogFilter> = _filter.asStateFlow()
@@ -58,7 +65,7 @@ class LogViewModel(application: Application) : AndroidViewModel(application) {
 
     // Refresh the list live when a new entry is written elsewhere (SmsReceiver, channels, …).
     private val changeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (_clearState.value != LogClearState.Clearing && (key == null || key == LOGS_KEY)) {
+        if (_clearState.value != LogClearState.Clearing && (key == null || key == LogUtils.LOGS_KEY)) {
             refresh()
         }
     }
@@ -79,11 +86,13 @@ class LogViewModel(application: Application) : AndroidViewModel(application) {
         }
         _clearState.value = LogClearState.Clearing
         LogUtils.clearLogs(getApplication()) { cleared ->
-            if (cleared) {
-                _logs.value = emptyList()
+            viewModelScope.launch {
+                if (cleared) {
+                    _logs.value = emptyList()
+                }
+                _clearState.value = if (cleared) LogClearState.Idle else LogClearState.Failed
+                refresh()
             }
-            _clearState.value = if (cleared) LogClearState.Idle else LogClearState.Failed
-            refresh()
         }
     }
 
@@ -96,9 +105,31 @@ class LogViewModel(application: Application) : AndroidViewModel(application) {
     /** Current filtered entries, most recent first. Used by the share action. */
     fun visibleLogs(): List<String> = _logs.value
 
+    suspend fun exportVisibleLogs(): Uri? {
+        val entries = _logs.value
+        if (entries.isEmpty()) {
+            return null
+        }
+        return withContext(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val directory = File(context.cacheDir, "shared-logs")
+            check(directory.isDirectory || directory.mkdirs())
+            directory.listFiles()?.sortedByDescending { it.lastModified() }?.drop(7)?.forEach {
+                it.delete()
+            }
+            val file = File(directory, "activity-${System.nanoTime()}.txt")
+            file.writeText(entries.joinToString("\n"), Charsets.UTF_8)
+            FileProvider.getUriForFile(context, "${context.packageName}.logs", file)
+        }
+    }
+
     private fun refresh() {
-        viewModelScope.launch {
-            _logs.value = LogUtils.getLogs(getApplication()).filter { matchesLogFilter(it, _filter.value) }
+        refreshJob?.cancel()
+        val requestedFilter = _filter.value
+        refreshJob = viewModelScope.launch {
+            _logs.value = withContext(Dispatchers.IO) {
+                LogUtils.getLogs(getApplication()).filter { matchesLogFilter(it, requestedFilter) }
+            }
         }
     }
 
@@ -106,8 +137,4 @@ class LogViewModel(application: Application) : AndroidViewModel(application) {
         prefs.unregisterOnSharedPreferenceChangeListener(changeListener)
     }
 
-    private companion object {
-        const val PREFS = "mc_sms_fwd_wa"
-        const val LOGS_KEY = "logs_v2"
-    }
 }

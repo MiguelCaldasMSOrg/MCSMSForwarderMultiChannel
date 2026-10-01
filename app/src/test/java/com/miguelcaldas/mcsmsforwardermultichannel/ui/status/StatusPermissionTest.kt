@@ -10,12 +10,26 @@ import org.junit.Test
 class StatusPermissionTest {
     @Test
     fun eachGrantActionMapsToExactlyOnePermission() {
-        assertEquals(Manifest.permission.RECEIVE_SMS, HealthAction.GRANT_RECEIVE_SMS.runtimePermission())
-        assertEquals(Manifest.permission.SEND_SMS, HealthAction.GRANT_SEND_SMS.runtimePermission())
-        assertEquals(Manifest.permission.POST_NOTIFICATIONS, HealthAction.GRANT_NOTIFICATIONS.runtimePermission())
-        assertNull(HealthAction.BATTERY_SETTINGS.runtimePermission())
-        assertNull(HealthAction.OPEN_CHANNELS.runtimePermission())
-        assertNull(HealthAction.OPEN_FILTERS.runtimePermission())
+        assertEquals(Manifest.permission.RECEIVE_SMS, HealthAction.GRANT_RECEIVE_SMS.runtimePermission(33))
+        assertEquals(Manifest.permission.SEND_SMS, HealthAction.GRANT_SEND_SMS.runtimePermission(33))
+        assertEquals(Manifest.permission.POST_NOTIFICATIONS, HealthAction.GRANT_NOTIFICATIONS.runtimePermission(33))
+        assertNull(HealthAction.OPEN_NOTIFICATION_SETTINGS.runtimePermission(33))
+        assertNull(HealthAction.BATTERY_SETTINGS.runtimePermission(33))
+        assertNull(HealthAction.OPEN_CHANNELS.runtimePermission(33))
+        assertNull(HealthAction.OPEN_FILTERS.runtimePermission(33))
+    }
+
+    @Test
+    fun olderAndroidUsesNotificationSettingsWithoutRequestingAnUnavailablePermission() {
+        for (sdkInt in 30..32) {
+            assertNull(HealthAction.GRANT_NOTIFICATIONS.runtimePermission(sdkInt))
+            assertNull(HealthAction.OPEN_NOTIFICATION_SETTINGS.runtimePermission(sdkInt))
+            assertEquals(Manifest.permission.RECEIVE_SMS, HealthAction.GRANT_RECEIVE_SMS.runtimePermission(sdkInt))
+            assertEquals(Manifest.permission.SEND_SMS, HealthAction.GRANT_SEND_SMS.runtimePermission(sdkInt))
+            val items = permissionHealthItems(receiveSmsGranted = true, notificationsGranted = false, smsEnabled = false, sendSmsGranted = false, sdkInt = sdkInt)
+            assertEquals(listOf(HealthItem("Allow icon badge count", "Settings", HealthAction.OPEN_NOTIFICATION_SETTINGS)), items)
+            assertTrue(permissionHealthItems(receiveSmsGranted = true, notificationsGranted = true, smsEnabled = false, sendSmsGranted = false, sdkInt = sdkInt).isEmpty())
+        }
     }
 
     @Test
@@ -25,12 +39,14 @@ class StatusPermissionTest {
             notificationsGranted = true,
             smsEnabled = false,
             sendSmsGranted = false,
+            sdkInt = 33,
         )
         val enabled = permissionHealthItems(
             receiveSmsGranted = true,
             notificationsGranted = true,
             smsEnabled = true,
             sendSmsGranted = false,
+            sdkInt = 33,
         )
 
         assertFalse(disabled.any { it.action == HealthAction.GRANT_SEND_SMS })
@@ -44,6 +60,7 @@ class StatusPermissionTest {
             notificationsGranted = false,
             smsEnabled = true,
             sendSmsGranted = false,
+            sdkInt = 33,
         )
 
         assertEquals(

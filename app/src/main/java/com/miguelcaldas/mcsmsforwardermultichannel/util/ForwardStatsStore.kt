@@ -2,6 +2,8 @@ package com.miguelcaldas.mcsmsforwardermultichannel.util
 
 import android.content.Context
 import androidx.core.content.edit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 object ForwardStatsStore {
     private const val PREFS = "mc_sms_fwd_wa"
@@ -10,6 +12,9 @@ object ForwardStatsStore {
     private const val KEY_FIRST = "fwd_first_ts"
     private const val KEY_LAST = "fwd_last_ts"
     private const val KEY_UNSEEN = "fwd_unseen_count"
+    private val badgeExecutor = boundedDaemonExecutor("badge-refresh", 1, 1)
+    private val badgeQueued = AtomicBoolean()
+    private val badgeRevision = AtomicLong()
 
     data class Stats(val count: Long, val firstMillis: Long, val lastMillis: Long) {
         val hasAny: Boolean get() = count > 0L
@@ -33,7 +38,7 @@ object ForwardStatsStore {
             badgePrefs.edit {
                 putLong(KEY_UNSEEN, unseen)
             }
-            LauncherBadge.setCount(app, unseen)
+            requestBadgeRefresh(app)
         }
     }
 
@@ -59,7 +64,7 @@ object ForwardStatsStore {
             badgePrefs.edit {
                 remove(KEY_UNSEEN)
             }
-            LauncherBadge.setCount(app, 0L)
+            requestBadgeRefresh(app)
         }
     }
 
@@ -70,7 +75,7 @@ object ForwardStatsStore {
             prefs.edit {
                 remove(KEY_UNSEEN)
             }
-            LauncherBadge.setCount(app, 0L)
+            requestBadgeRefresh(app)
         }
     }
 
@@ -78,7 +83,33 @@ object ForwardStatsStore {
         val app = context.applicationContext
         val prefs = app.getSharedPreferences(BADGE_PREFS, Context.MODE_PRIVATE)
         synchronized(this) {
-            LauncherBadge.setCount(app, prefs.getLong(KEY_UNSEEN, 0L))
+            requestBadgeRefresh(app)
+        }
+    }
+
+    private fun requestBadgeRefresh(context: Context) {
+        badgeRevision.incrementAndGet()
+        scheduleBadgeRefresh(context)
+    }
+
+    private fun scheduleBadgeRefresh(context: Context) {
+        if (!badgeQueued.compareAndSet(false, true)) {
+            return
+        }
+        badgeExecutor.execute {
+            var appliedRevision = -1L
+            try {
+                do {
+                    appliedRevision = badgeRevision.get()
+                    val count = context.getSharedPreferences(BADGE_PREFS, Context.MODE_PRIVATE).getLong(KEY_UNSEEN, 0L)
+                    LauncherBadge.setCount(context, count)
+                } while (appliedRevision != badgeRevision.get())
+            } finally {
+                badgeQueued.set(false)
+                if (appliedRevision != badgeRevision.get()) {
+                    scheduleBadgeRefresh(context)
+                }
+            }
         }
     }
 }

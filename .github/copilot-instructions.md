@@ -25,12 +25,16 @@ local copy.
 
 Focused JVM tests cover filtering/normalization, sender rules, log classification, permission
 readiness, concurrency/deadline behavior, build metadata, authenticated remote-SMS command
-parsing/merging, and encrypted provisioning (including PowerShell interoperability). No
-instrumentation suite is configured; use Gradle lint for Android static checks.
+parsing/merging, and encrypted provisioning (including PowerShell interoperability). Emulator-only
+`app/src/androidTest` checks cover platform/configuration behavior on regular builds; `device-tests`
+is a self-instrumenting black-box UI driver for both regular and minified APKs. The full API 30-37
+matrix runs ONLY for new release-tag pushes, never ordinary pushes, PRs, schedules, or manual
+preflight. Focused local checks are allowed. See `docs/android-compatibility.md` for coverage,
+limitations, and the compatibility-code retirement checklist.
 
 The build runs Gradle on JDK 26 locally and in release CI while Java and Kotlin bytecode continue
 to target Java 17. It uses AGP 9.3.2 with built-in Kotlin 2.2.10, Gradle 9.5, `compileSdk` 37,
-`targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00 (Material 3 follows the
+`minSdk` 30, `targetSdk` 36, AndroidX Core 1.19, Lifecycle 2.11, Compose BOM 2026.08.00 (Material 3 follows the
 BOM), Navigation 2.10, Google Code Scanner 16.1, and ShortcutBadger 1.1.22.
 Gradle's per-variant `GenerateBuildMetadataTask` generates `GeneratedBuildMetadata` at task
 execution; local builds use the current time and Git `HEAD` (`-dirty` when applicable), while
@@ -57,14 +61,15 @@ together and run lint plus a debug build after icon changes.
 
 ## Architecture
 
-Single-module Android app (`:app`), Kotlin. The UI is **Jetpack Compose** (Material 3): a single
+Single Android application module (`:app`), Kotlin, plus a test-only `:device-tests` driver. The UI is **Jetpack Compose** (Material 3): a single
 `MainActivity: ComponentActivity` calls `setContent { MCSmsForwarderTheme { AppRoot() } }`, and
 `AppRoot` hosts a `NavController` that routes between screens (status, channels, filters, log).
 Each screen has an `AndroidViewModel` exposing `StateFlow` draft state.
 
-**Pipeline** (`SmsReceiver`): incoming SMS → reassemble multipart → intercept a reserved remote-SMS
+**Pipeline** (`SmsReceiver`): incoming SMS -> immediate `goAsync()` with a nine-second finish guard ->
+bounded background evaluation (two workers, 32 queued tasks) -> reassemble multipart -> intercept a reserved remote-SMS
 rule command before all forwarding gates (see below) → master kill-switch (`MasterSwitchStore.load`,
-default ON) → bail if **no channel is operational** (each channel: enabled toggle on AND
+default ON, read with one immutable `ForwardingConfiguration` snapshot under `FilterRuleMutationCoordinator`) -> bail if **no channel is operational** (each channel: enabled toggle on AND
 credentials present) → **SMS loop guard** (drop messages from the SMS forward destination via
 `PhoneNumberUtils.areSamePhoneNumber`; SMS channel only) → normalize the body with
 `TextNormalizer.normalizeForMatching` (NFD + strip combining marks + lowercase) → compile each
@@ -74,13 +79,16 @@ full-string RegEx sender rules exactly as stored (`PhoneNumberUtils.areSamePhone
 literal phone rules; invalid sender regexes silently skip) → evaluate both results: both true
 forwards, exactly one true logs `FILTER REJECTED` with the full raw sender/message and failed component,
 both false exits silently → apply optional `ForwardTemplate` (`%s`/`%t`/`%m` tokens) →
-`goAsync()` keeps the receiver alive → **fan out the same body to every operational channel**
+shared `ForwardingEvaluator` also used by the Filters dry-run -> **fan out the same body to every operational channel**
 (`WhatsAppCloudChannel`, `TelegramChannel`, `SmsChannel`). A shared `AtomicInteger remaining`
 counts pending channel callbacks; each channel's `onComplete(success)` decrements it, and when it reaches
 zero the receiver records **exactly one** forward stat (if any channel succeeded) via
 `ForwardStatsStore.recordForward`, increments the unseen launcher-badge count once, and calls
 `pending.finish()`. The original (accented, cased) body is what gets forwarded — normalization is
-only for matching.
+only for matching. Expired/rejected work is reported generically without command data; it never
+automatically retries. Settings changes govern future admission, not already-admitted snapshots.
+Java backtracking regex cannot be forcibly interrupted; the finite worker pool and receiver
+deadline bound its impact but do not guarantee cancellation of a pathological match.
 
 **Loop guard (SMS only).** A message arriving from the SMS forward destination is suppressed so an
 SMS→SMS echo cannot bounce indefinitely. WhatsApp and Telegram run on a different transport and
@@ -92,21 +100,25 @@ cannot re-trigger the pipeline, so the guard is scoped to the SMS channel's dest
 `SEND OK [Channel]` / `SEND FAILED [Channel]` and never log secrets. **Channels never record
 stats** — `SmsReceiver` owns the single increment per matched SMS.
 
-**WhatsApp Cloud channel** (`util/WhatsAppCloudChannel.kt`): `object` with a cached daemon
-`Executor` named `wa-sender`; overlapping sends run concurrently rather than queueing or failing busy.
+**WhatsApp Cloud channel** (`util/WhatsAppCloudChannel.kt`): `object` with a bounded daemon
+`Executor` named `wa-sender` (eight workers, 32 queued requests). Saturation fails explicitly;
+expired queued requests never start. Global completion capacity is reserved before admission.
 The message template is **fixed in code** (constants `TEMPLATE_NAME`, `TEMPLATE_LANGUAGE`,
 `TEMPLATE_USER`) — it is intentionally not selectable in the config or the UI. It points at the
 approved `titled_forwarded_sms` template, whose body has two `{{n}}` parameters: `{{1}}` is bound to
 the fixed user `TEMPLATE_USER` (`"Miguel"`) and `{{2}}` to the forwarded SMS body. `send` builds the
 template JSON via `buildPayload`, strips the leading `+` from the recipient, and opens
-`HttpURLConnection` to `https://graph.facebook.com/v21.0/{phoneNumberId}/messages`. It writes the body with
-`setFixedLengthStreamingMode`, sets bearer authorization, and applies 8 s connect/read safeguards.
-The receiver-facing completion callback has an 8.5 s overall deadline; if that expires, delivery
+shared OkHttp transport to `https://graph.facebook.com/v21.0/{phoneNumberId}/messages`. It sends a
+fixed-length body with bearer authorization and 8 s connect/read/write/total-call safeguards.
+Redirects and automatic retries are disabled. Error bodies above 64 KiB are omitted entirely,
+not truncated before secret redaction. Requests are capped at 1 MiB and expanded forwarding bodies
+at 256 Ki characters. The receiver-facing callback has an 8.5 s deadline, shortened to the receiver's
+remaining budget; if that expires, delivery
 is logged as unknown while the transport finishes unwinding. The channel then logs
 `SEND OK [WhatsApp] → {recipient} (HTTP {code})` or the matching `SEND FAILED` with the Meta
 `error.{code,type,message}` summary. The access token never appears in logs.
 
-**Telegram channel** (`util/TelegramChannel.kt`): sibling `object` on a cached `tg-sender` daemon
+**Telegram channel** (`util/TelegramChannel.kt`): sibling `object` on a bounded `tg-sender` daemon
 executor with the same timeout behavior. It POSTs `chat_id`+`text` (web previews disabled) to
 `https://api.telegram.org/bot{token}/sendMessage` (token URL-encoded), logs
 `SEND OK/FAILED [Telegram]` with the Telegram `error_code`+`description` summary. The bot token never
@@ -114,9 +126,9 @@ appears in logs.
 
 **SMS channel** (`util/SmsChannel.kt`): re-sends through the device modem via
 `SmsManager.sendMultipartTextMessage` (obtained with `getSystemService(SmsManager::class.java)`,
-API 31+). `onComplete(true)` fires when the message is successfully *handed to the modem* (no
+API 31+, or `SmsManager.getDefault()` on API 30). `onComplete(true)` fires when the message is successfully *handed to the modem* (no
 exception), mirroring how the HTTP channels treat 2xx — neither guarantees delivery. A private,
-dynamically-registered `BroadcastReceiver` (action `…SMS_SENT_RESULT`, `RECEIVER_NOT_EXPORTED`)
+dynamically-registered `BroadcastReceiver` (action `…SMS_SENT_RESULT`, AndroidX `RECEIVER_NOT_EXPORTED`)
 logs the modem's asynchronous per-segment result (`SEND OK [SMS]`, `no service`, `radio off`, …).
 Needs the `SEND_SMS` permission. The only "credential" is the destination number; there is no token.
 The app does not choose a subscription ID, so multi-SIM devices use Android's configured default
@@ -129,7 +141,9 @@ SMS subscription.
 branded, alpha-only `ic_stat_sms_forwarder` system glyph.
 
 **Runtime permissions**: readiness rows use distinct `HealthAction` values for `RECEIVE_SMS`,
-`SEND_SMS`, and `POST_NOTIFICATIONS`. `StatusScreen` launches exactly one `RequestPermission`
+`SEND_SMS`, and `POST_NOTIFICATIONS` (API 33+). On API 30-32, notification readiness uses
+`NotificationManagerCompat.areNotificationsEnabled()` and `OPEN_NOTIFICATION_SETTINGS` opens
+package-specific notification settings with an app-settings fallback. `StatusScreen` launches exactly one `RequestPermission`
 contract for the tapped row. A denied or suppressed result shows an indefinite snackbar with an
 **App settings** action, covering permanently denied permissions instead of failing silently.
 `SEND_SMS` is requested only while the SMS channel is enabled. `POST_NOTIFICATIONS` is a
@@ -204,11 +218,14 @@ ShortcutBadger's normal launcher selection and accept that it may be unsupported
 does not create forwarding-result or persistent count notifications. Do not add manufacturer
 detection around ShortcutBadger; rely on its launcher selection and accept a no-op when unsupported.
 
-**Persistence**: non-secret state uses a single `SharedPreferences` file named `mc_sms_fwd_wa`;
+**Persistence**: non-secret configuration/statistics use `SharedPreferences` named `mc_sms_fwd_wa`;
 the WhatsApp token, Telegram token, and remote-SMS HMAC key use the separate encrypted store
 described below. There is no database. Lists (sender values, sender RegEx flags, message regexes) are
-parallel/newline-delimited strings. Logs use a `timestamp\x1Fmessage` format with auto-pruning (35
-days / 2000 entries); `LogUtils.addToLog` collapses CR/LF/`\x1F` runs in the message to a space so
+parallel/newline-delimited strings. Logs migrate to `mc_sms_fwd_log` and use `timestamp\x1Fmessage`
+with whole-entry pruning at 35 days / 2000 entries / 4 MiB UTF-8 data. Appends are batched with
+128 operations / 1 MiB pending limits, explicit overload markers, and a 512 KiB per-entry limit.
+Reads/formatting run off-main and share uses a private cache-file FileProvider with eight retained exports.
+`LogUtils.addToLog` collapses CR/LF/`\x1F` runs in the message to a space so
 multi-line bodies can't corrupt the line-oriented format. WhatsApp credentials live under keys
 defined in `WhatsAppConfig`: `waPhoneNumberId`, `waRecipient`, `waEnabled` (default true). The
 WhatsApp API template is fixed in code (see the WhatsApp channel above); the separate shared
@@ -243,6 +260,12 @@ secrets, and only then restores the requested enabled states; rollback restores 
 while an unrecoverable partial write stays disabled. The `mc_sms_fwd_secure` preferences file is
 excluded from Android backup and device transfer because its Keystore key cannot be transferred.
 
+Manual channel saves use the same checked transaction with null token updates meaning "keep existing
+ciphertext". Rollback restores exact encrypted preference bytes rather than re-encrypting old secrets.
+Forms disable editing while saving, keep drafts on failure, and navigate only after success. Typed
+token drafts are memory-only ViewModel state. Channel toggles, master-switch writes, filter writes,
+imports, remote changes, and forwarding snapshots share the configuration mutation lock.
+
 **Screens** are Compose, each backed by an `AndroidViewModel`. Manual form edits mutate in-memory
 draft `StateFlow`s and are persisted only when the user taps the screen's explicit **Save** button
 (no debounced auto-save); encrypted bundle import is a separate explicit action that persists after
@@ -269,7 +292,9 @@ without saving them.
   lowercase and accent-free. Invalid regexes are silently treated as non-matches.
 - **Sender matching** normalizes only the incoming raw sender. Literal and RegEx sender rules remain
   exactly as entered, so textual rules must likewise be lowercase and accent-free; sender regexes
-  use full-string matching. Literal phone rules retain `PhoneNumberUtils.areSamePhoneNumber`.
+  use full-string matching. Literal phone rules and live/dry-run loop guards share `PhoneNumberCompat`:
+  native `PhoneNumberUtils.areSamePhoneNumber` on API 31+, pinned libphonenumber on API 30 with the
+  same exact/national/qualified-short comparison policy. Never substitute loose suffix comparison.
 - **Version catalog** (`gradle/libs.versions.toml`) manages all dependency and SDK versions;
   `app/build.gradle.kts` references them via `libs.*`.
 - **Kotlin formatting preference**: keep inheritance/type colons tight for class declarations

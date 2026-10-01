@@ -4,10 +4,10 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.TimeUnit
 
 /**
- * Posts forwarded SMS bodies to the WhatsApp Cloud API ("Graph") on cached
- * background workers so overlapping messages do not block each other.
+ * Posts forwarded SMS bodies to the WhatsApp Cloud API on bounded concurrent workers.
  *
  * A 2xx response is reported to SmsReceiver as success; the receiver owns stats.
  * The access token never appears in log entries — only the HTTP status code and
@@ -31,16 +31,24 @@ object WhatsAppCloudChannel {
     // BroadcastReceiver even if a transport call takes longer to unwind.
     private val sendExecutor = cachedDaemonExecutor("wa-sender")
 
-    fun send(context: Context, config: WhatsAppConfig, body: String, onComplete: (Boolean) -> Unit = {}): Boolean {
+    fun send(context: Context, config: WhatsAppConfig, body: String, onComplete: (Boolean) -> Unit = {}, timeoutMs: Long = COMPLETION_TIMEOUT_MS): Boolean {
         val app = context.applicationContext
         if (!config.hasCredentials) {
             LogUtils.addToLog(app, "SEND FAILED [WhatsApp] → missing config")
             onComplete(false)
             return false
         }
+        val budget = timeoutMs.coerceIn(1, COMPLETION_TIMEOUT_MS)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budget)
         return sendExecutor.executeWithDeadline(
-            timeoutMs = COMPLETION_TIMEOUT_MS,
-            block = { postSync(config, body) },
+            timeoutMs = budget,
+            block = {
+                val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+                if (remaining <= 0) {
+                    throw TimeoutException()
+                }
+                postSync(config, body, minOf(8_000, remaining))
+            },
         ) { outcome ->
             var success = false
             try {
@@ -80,11 +88,11 @@ object WhatsAppCloudChannel {
     private fun redactSecret(text: String, secret: String): String =
         if (secret.isBlank()) text else text.replace(secret, "[redacted]")
 
-    private fun postSync(config: WhatsAppConfig, body: String): Outcome {
+    private fun postSync(config: WhatsAppConfig, body: String, callTimeoutMs: Long): Outcome {
         val url = "$GRAPH_BASE/${config.phoneNumberId}/messages"
         val payload = buildPayload(config, body).toString().toByteArray(Charsets.UTF_8)
         val headers = mapOf("Authorization" to "Bearer ${config.accessToken}")
-        val result = HttpJsonClient.postJson(url, payload, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, headers)
+        val result = HttpJsonClient.postJson(url, payload, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, headers, callTimeoutMs)
         val summary = if (result.success) null else summarizeError(result.errorBody, config.accessToken)
         return Outcome(result.statusCode, result.success, summary)
     }

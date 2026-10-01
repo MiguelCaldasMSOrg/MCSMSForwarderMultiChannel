@@ -40,8 +40,13 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="true"
+        android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:theme="@style/Theme.MCSmsForwarderMultiChannel">
+
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.logs" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/log_share_paths" />
+        </provider>
 
         <meta-data
             android:name="com.google.mlkit.vision.DEPENDENCIES"

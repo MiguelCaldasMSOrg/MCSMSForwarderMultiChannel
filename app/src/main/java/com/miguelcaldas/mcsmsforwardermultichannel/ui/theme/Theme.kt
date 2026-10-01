@@ -1,5 +1,6 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.ui.theme
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -33,15 +34,13 @@ private val DarkColors = darkColorScheme(
 )
 
 /**
- * App theme. Prefers Material You dynamic color on Android 12+ (which is always the
- * case here: minSdk is 33), falling back to the static brand palette when dynamic
- * color is disabled or unavailable.
+ * App theme. Uses Material You on Android 12+ and the static brand palette otherwise.
  */
 @Composable
 fun MCSmsForwarderTheme(darkTheme: Boolean = isSystemInDarkTheme(), dynamicColor: Boolean = true, content: @Composable () -> Unit) {
     val context = LocalContext.current
     val colorScheme: ColorScheme = when {
-        dynamicColor -> {
+        dynamicColor && Build.VERSION.SDK_INT >= 31 -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
         darkTheme -> DarkColors

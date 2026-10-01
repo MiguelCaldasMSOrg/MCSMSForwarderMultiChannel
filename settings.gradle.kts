@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "MCSMSForwarderMultiChannel"
 include(":app")
+include(":device-tests")

@@ -1,6 +1,7 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.ui.log
 
 import android.content.Intent
+import android.content.ClipData
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -51,6 +56,9 @@ import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogRemoteLight
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogSuccessDark
 import com.miguelcaldas.mcsmsforwardermultichannel.ui.theme.LogSuccessLight
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -61,6 +69,8 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
     val clearState by viewModel.clearState.collectAsStateWithLifecycle()
     val dark = isSystemInDarkTheme()
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    var sharing by remember { mutableStateOf(false) }
 
     LaunchedEffect(clearState) {
         if (clearState == LogClearState.Failed) {
@@ -110,7 +120,9 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
                 val empty = if (filter == LogFilter.All) "No logs yet." else "No entries match this filter."
                 Text(empty, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
             } else {
-                val annotated = remember(logs, dark) { buildLogText(logs, dark) }
+                val annotated by produceState(AnnotatedString(""), logs, dark) {
+                    value = withContext(Dispatchers.Default) { buildLogText(logs, dark) }
+                }
                 SelectionContainer {
                     Text(annotated, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                 }
@@ -121,15 +133,26 @@ fun LogScreen(viewModel: LogViewModel = viewModel()) {
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = {
-                    val payload = viewModel.visibleLogs().joinToString("\n")
-                    if (payload.isNotEmpty()) {
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, "MC SMS Forwarder log")
-                            putExtra(Intent.EXTRA_TEXT, payload)
+                TextButton(enabled = !sharing, onClick = {
+                    sharing = true
+                    scope.launch {
+                        try {
+                            val uri = viewModel.exportVisibleLogs()
+                            if (uri != null) {
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "MC SMS Forwarder log")
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    clipData = ClipData.newUri(context.contentResolver, "Activity log", uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(send, "Share log"))
+                            }
+                        } catch (_: Exception) {
+                            snackbarHostState.showSnackbar("Could not share logs")
+                        } finally {
+                            sharing = false
                         }
-                        context.startActivity(Intent.createChooser(send, "Share log"))
                     }
                 }) {
                     Icon(painterResource(R.drawable.ic_share_24), contentDescription = null)

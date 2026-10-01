@@ -4,27 +4,24 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
-import android.telephony.PhoneNumberUtils
 import com.miguelcaldas.mcsmsforwardermultichannel.util.FilterRuleMutationCoordinator
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardStatsStore
-import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardingConfiguration
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardingEvaluator
 import com.miguelcaldas.mcsmsforwardermultichannel.util.InboundFilterDecision
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
 import com.miguelcaldas.mcsmsforwardermultichannel.util.MasterSwitchStore
-import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
+import com.miguelcaldas.mcsmsforwardermultichannel.util.PhoneNumberCompat
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RemoteSmsRuleCommands
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RemoteSmsRuleParseResult
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RemoteSmsRulesConfig
-import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
-import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderMatcher
-import com.miguelcaldas.mcsmsforwardermultichannel.util.SmsConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SmsChannel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramChannel
-import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramConfig
-import com.miguelcaldas.mcsmsforwardermultichannel.util.TextNormalizer
 import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppCloudChannel
-import com.miguelcaldas.mcsmsforwardermultichannel.util.WhatsAppConfig
-import com.miguelcaldas.mcsmsforwardermultichannel.util.decideInboundFilter
+import com.miguelcaldas.mcsmsforwardermultichannel.util.boundedDaemonExecutor
+import com.miguelcaldas.mcsmsforwardermultichannel.util.scheduleDeadline
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -33,14 +30,58 @@ class SmsReceiver: BroadcastReceiver() {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
             return
         }
+        val app = context.applicationContext
+        val pending = goAsync()
+        val finished = AtomicBoolean(false)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(9)
+        val expiration = scheduleDeadline(9_000) {
+            if (finished.compareAndSet(false, true)) {
+                try {
+                    LogUtils.addToLog(app, "SMS PROCESSING EXPIRED -> delivery may be unknown; no automatic retry")
+                } finally {
+                    pending.finish()
+                }
+            }
+        }
+        val complete: () -> Unit = {
+            if (finished.compareAndSet(false, true)) {
+                expiration.cancel(false)
+                pending.finish()
+            }
+        }
+        val active: () -> Boolean = { !finished.get() && System.nanoTime() < deadline }
+        try {
+            processingExecutor.execute {
+                var waitingForChannels = false
+                try {
+                    if (active()) {
+                        waitingForChannels = process(app, intent, complete, active, deadline)
+                    }
+                } catch (_: Exception) {
+                    LogUtils.addToLog(app, "SMS PROCESSING FAILED -> configuration or processing unavailable")
+                } finally {
+                    if (!waitingForChannels) {
+                        complete()
+                    }
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            try {
+                LogUtils.addToLog(app, "SMS PROCESSING REJECTED -> processing capacity exhausted; no automatic retry")
+            } finally {
+                complete()
+            }
+        }
+    }
 
+    private fun process(context: Context, intent: Intent, complete: () -> Unit, active: () -> Boolean, deadline: Long): Boolean {
         // The telephony framework reassembles concatenated SMS using the UDH (reference,
         // total parts, sequence number) and only broadcasts SMS_RECEIVED once every part
         // has arrived. The returned array therefore represents a single logical message
         // with its segments already ordered; concatenating their bodies yields the full text.
-        val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
+        val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return false
         if (messages.isEmpty()) {
-            return
+            return false
         }
 
         val fullBody = buildString {
@@ -51,52 +92,35 @@ class SmsReceiver: BroadcastReceiver() {
 
         val prefs = context.getSharedPreferences("mc_sms_fwd_wa", Context.MODE_PRIVATE)
         if (RemoteSmsRuleCommands.isReserved(fullBody)) {
-            handleRemoteSmsRuleCommand(context, prefs, fullBody)
-            return
+            return handleRemoteSmsRuleCommand(context, prefs, fullBody, complete, active, deadline)
         }
 
-        val sender = messages[0].originatingAddress ?: return
+        val sender = messages[0].originatingAddress ?: return false
 
         // Master kill-switch for ordinary forwarding; reserved remote commands were handled above.
         // Fresh installs default ON.
-        if (!MasterSwitchStore.load(prefs)) {
-            return
+        val configuration = FilterRuleMutationCoordinator.withLock {
+            if (!MasterSwitchStore.load(prefs) || !active()) null else ForwardingConfiguration.load(context)
+        } ?: return false
+        if (!configuration.hasOperationalChannel || !active()) {
+            return false
         }
-
-        val waConfig = WhatsAppConfig.load(context)
-        val tgConfig = TelegramConfig.load(context)
-        val smsConfig = SmsConfig.load(prefs)
-        if (!waConfig.isOperational && !tgConfig.isOperational && !smsConfig.isOperational) {
-            return
-        }
-
-        val allowedSenders = SenderListStore.load(prefs)
-        val patterns = RegexListStore.load(prefs)
-        val forwardTemplate = prefs.getString(ForwardTemplate.KEY, "").orEmpty()
-        val countryIso = SenderMatcher.deviceCountryIso(context)
 
         // Loop guard (SMS channel only): never re-forward a message that arrived from our
         // own SMS forward destination. Same-transport echo would otherwise bounce
         // indefinitely if the destination is also an allowed sender. WhatsApp/Telegram
         // run on a different transport and cannot trigger this, so the guard is scoped
         // to the SMS channel's destination.
-        if (smsConfig.isOperational && PhoneNumberUtils.areSamePhoneNumber(sender, smsConfig.destination, countryIso)) {
+        if (configuration.sms.isOperational && PhoneNumberCompat.areSame(sender, configuration.sms.destination, configuration.countryIso)) {
             LogUtils.addToLog(context, "LOOP GUARD \u2192 suppressed from $sender (= SMS forward destination)")
-            return
+            return false
         }
 
-        // Compile each pattern at most once per call; the previous form rebuilt Regex
-        // objects inside `any { }` on every iteration. Patterns that fail to compile
-        // are silently treated as non-matches — a single malformed entry never blocks
-        // the others. The body, but not the regex source, is stripped of diacritics and
-        // lowercased before matching, so patterns must be authored lowercase and accent-free.
-        // The original body (accents and case preserved) is still what gets forwarded.
-        val normalizedBody = TextNormalizer.normalizeForMatching(fullBody)
-        val bodyMatches = patterns.asSequence()
-            .mapNotNull { runCatching { Regex(it) }.getOrNull() }
-            .any { it.containsMatchIn(normalizedBody) }
-        val senderMatches = SenderMatcher.matches(allowedSenders, sender, countryIso)
-        when (decideInboundFilter(senderMatches, bodyMatches)) {
+        val evaluation = ForwardingEvaluator.evaluate(configuration, sender, fullBody, messages[0].timestampMillis)
+        if (!active()) {
+            return false
+        }
+        when (evaluation.decision) {
             InboundFilterDecision.FORWARD -> Unit
             InboundFilterDecision.SENDER_REJECTED -> {
                 LogUtils.addToLog(
@@ -104,7 +128,7 @@ class SmsReceiver: BroadcastReceiver() {
                     "${LogUtils.FILTER_REJECTED_PREFIX} \u2192 Sender did not match | " +
                         "Raw from: $sender | Raw message: $fullBody",
                 )
-                return
+                return false
             }
             InboundFilterDecision.MESSAGE_RULE_REJECTED -> {
                 LogUtils.addToLog(
@@ -112,18 +136,21 @@ class SmsReceiver: BroadcastReceiver() {
                     "${LogUtils.FILTER_REJECTED_PREFIX} \u2192 Message rule did not match | " +
                         "Raw from: $sender | Raw message: $fullBody",
                 )
-                return
+                return false
             }
-            InboundFilterDecision.IGNORE -> return
+            InboundFilterDecision.IGNORE -> return false
         }
+        return send(context, configuration, evaluation.outgoingBody, true, complete, active, deadline)
+    }
 
-        val outgoingBody = if (forwardTemplate.isEmpty()) fullBody else ForwardTemplate.apply(forwardTemplate, sender, messages[0].timestampMillis, fullBody)
-
-        // Network I/O must outlive onReceive returning, so hand the receiver off to
-        // goAsync() and let each channel report completion. The forward stat is
-        // incremented at most once per SMS, regardless of how many channels succeeded.
-        val pending = goAsync()
+    private fun send(context: Context, configuration: ForwardingConfiguration, outgoingBody: String, recordForward: Boolean, complete: () -> Unit, active: () -> Boolean, deadline: Long): Boolean {
+        if (!active()) {
+            return false
+        }
         val app = context.applicationContext
+        val waConfig = configuration.whatsApp
+        val tgConfig = configuration.telegram
+        val smsConfig = configuration.sms
         val sendViaWa = waConfig.isOperational
         val sendViaTg = tgConfig.isOperational
         val sendViaSms = smsConfig.isOperational
@@ -135,41 +162,63 @@ class SmsReceiver: BroadcastReceiver() {
             }
             if (remaining.decrementAndGet() == 0) {
                 try {
-                    if (anySuccess.get()) {
+                    if (recordForward && anySuccess.get()) {
                         ForwardStatsStore.recordForward(app)
                     }
                 } finally {
-                    pending.finish()
+                    complete()
                 }
             }
         }
 
         if (sendViaWa) {
-            LogUtils.addToLog(context, "REAL SEND [WhatsApp] \u2192 To: ${waConfig.recipient} | Msg: $outgoingBody")
-            WhatsAppCloudChannel.send(context, waConfig, outgoingBody, onChannelDone)
+            if (recordForward) {
+                LogUtils.addToLog(context, "REAL SEND [WhatsApp] \u2192 To: ${waConfig.recipient} | Msg: $outgoingBody")
+            }
+            if (active()) {
+                WhatsAppCloudChannel.send(context, waConfig, outgoingBody, onChannelDone, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()))
+            } else {
+                onChannelDone(false)
+            }
         }
         if (sendViaTg) {
-            LogUtils.addToLog(context, "REAL SEND [Telegram] \u2192 To: chat ${tgConfig.chatId} | Msg: $outgoingBody")
-            TelegramChannel.send(context, tgConfig, outgoingBody, onChannelDone)
+            if (recordForward) {
+                LogUtils.addToLog(context, "REAL SEND [Telegram] \u2192 To: chat ${tgConfig.chatId} | Msg: $outgoingBody")
+            }
+            if (active()) {
+                TelegramChannel.send(context, tgConfig, outgoingBody, onChannelDone, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()))
+            } else {
+                onChannelDone(false)
+            }
         }
         if (sendViaSms) {
-            LogUtils.addToLog(context, "REAL SEND [SMS] \u2192 To: ${smsConfig.destination} | Msg: $outgoingBody")
-            SmsChannel.send(context, smsConfig, outgoingBody, onChannelDone)
+            if (recordForward) {
+                LogUtils.addToLog(context, "REAL SEND [SMS] \u2192 To: ${smsConfig.destination} | Msg: $outgoingBody")
+            }
+            if (active()) {
+                SmsChannel.send(context, smsConfig, outgoingBody, onChannelDone)
+            } else {
+                onChannelDone(false)
+            }
         }
+        return true
     }
 
     private fun handleRemoteSmsRuleCommand(
         context: Context,
         prefs: android.content.SharedPreferences,
         body: String,
-    ) {
-        val acknowledgement = FilterRuleMutationCoordinator.withLock {
+        complete: () -> Unit,
+        active: () -> Boolean,
+        deadline: Long,
+    ): Boolean {
+        val response = FilterRuleMutationCoordinator.withLock {
             val config = RemoteSmsRulesConfig.load(context)
-            if (!config.isOperational) {
+            if (!config.isOperational || !active()) {
                 return@withLock null
             }
 
-            when (val parsed = RemoteSmsRuleCommands.parse(body, config.hmacKey)) {
+            val acknowledgement = when (val parsed = RemoteSmsRuleCommands.parse(body, config.hmacKey)) {
                 RemoteSmsRuleParseResult.NotCommand -> null
                 RemoteSmsRuleParseResult.Rejected -> {
                     LogUtils.addToLog(context, RemoteSmsRuleCommands.REJECTION_LOG)
@@ -189,46 +238,17 @@ class SmsReceiver: BroadcastReceiver() {
                         result.acknowledgement
                     }
                 }
-            }
-        } ?: return
-        sendRemoteSmsAcknowledgement(context, prefs, acknowledgement)
+            } ?: return@withLock null
+            acknowledgement to ForwardingConfiguration.load(context)
+        } ?: return false
+        if (!response.second.hasOperationalChannel) {
+            LogUtils.addToLog(context, RemoteSmsRuleCommands.ACK_SKIPPED_NO_CHANNELS_LOG)
+            return false
+        }
+        return send(context, response.second, response.first, false, complete, active, deadline)
     }
 
-    private fun sendRemoteSmsAcknowledgement(
-        context: Context,
-        prefs: android.content.SharedPreferences,
-        body: String,
-    ) {
-        val waConfig = WhatsAppConfig.load(context)
-        val tgConfig = TelegramConfig.load(context)
-        val smsConfig = SmsConfig.load(prefs)
-        val sendViaWa = waConfig.isOperational
-        val sendViaTg = tgConfig.isOperational
-        val sendViaSms = smsConfig.isOperational
-        val channelCount =
-            (if (sendViaWa) 1 else 0) +
-                (if (sendViaTg) 1 else 0) +
-                (if (sendViaSms) 1 else 0)
-        if (channelCount == 0) {
-            LogUtils.addToLog(context, RemoteSmsRuleCommands.ACK_SKIPPED_NO_CHANNELS_LOG)
-            return
-        }
-
-        val pending = goAsync()
-        val remaining = AtomicInteger(channelCount)
-        val onChannelDone: (Boolean) -> Unit = {
-            if (remaining.decrementAndGet() == 0) {
-                pending.finish()
-            }
-        }
-        if (sendViaWa) {
-            WhatsAppCloudChannel.send(context, waConfig, body, onChannelDone)
-        }
-        if (sendViaTg) {
-            TelegramChannel.send(context, tgConfig, body, onChannelDone)
-        }
-        if (sendViaSms) {
-            SmsChannel.send(context, smsConfig, body, onChannelDone)
-        }
+    private companion object {
+        val processingExecutor = boundedDaemonExecutor("sms-evaluator", 2, 32)
     }
 }

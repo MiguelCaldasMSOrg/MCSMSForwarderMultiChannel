@@ -13,8 +13,10 @@ object RegexListStore {
         prefs.getString(KEY, "")?.split('\n')?.filter { it.isNotBlank() } ?: emptyList()
 
     fun save(prefs: SharedPreferences, patterns: List<String>) {
-        prefs.edit {
-            write(this, patterns)
+        FilterRuleMutationCoordinator.withLock {
+            prefs.edit {
+                write(this, patterns)
+            }
         }
     }
 

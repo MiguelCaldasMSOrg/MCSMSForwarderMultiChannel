@@ -5,7 +5,7 @@ kotlin = "2.2.10"
 
 # Android SDK
 compileSdk = "37"
-minSdk = "33"
+minSdk = "30"
 targetSdk = "36"
 
 # Libraries
@@ -20,6 +20,12 @@ junit = "4.13.2"
 orgJson = "20260814"
 playServicesCodeScanner = "16.1.0"
 shortcutBadger = "1.1.22"
+libphonenumber = "9.0.40"
+androidxTestRunner = "1.7.0"
+androidxTestJunit = "1.3.0"
+androidxUiAutomator = "2.4.0"
+errorproneAnnotations = "2.50.0"
+okhttp = "5.5.0"
 
 [libraries]
 androidx-core = { group = "androidx.core", name = "core", version.ref = "androidxCore" }
@@ -38,7 +44,15 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 play-services-code-scanner = { group = "com.google.android.gms", name = "play-services-code-scanner", version.ref = "playServicesCodeScanner" }
 shortcut-badger = { group = "me.leolin", name = "ShortcutBadger", version.ref = "shortcutBadger" }
+libphonenumber = { group = "com.googlecode.libphonenumber", name = "libphonenumber", version.ref = "libphonenumber" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
+androidx-test-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestJunit" }
+androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "androidxUiAutomator" }
+errorprone-annotations = { group = "com.google.errorprone", name = "error_prone_annotations", version.ref = "errorproneAnnotations" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+android-test = { id = "com.android.test", version.ref = "agp" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

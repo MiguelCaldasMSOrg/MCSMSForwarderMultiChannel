@@ -4,10 +4,10 @@ import android.content.Context
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.TimeUnit
 
 /**
- * Posts forwarded SMS bodies to the Telegram Bot API on cached background
- * workers so overlapping messages do not block each other.
+ * Posts forwarded SMS bodies to the Telegram Bot API on bounded concurrent workers.
  *
  * Success is signalled to the caller via `onComplete(true|false)` so the
  * receiver can decide whether to record a forward stat. The bot token is
@@ -23,16 +23,24 @@ object TelegramChannel {
 
     private val sendExecutor = cachedDaemonExecutor("tg-sender")
 
-    fun send(context: Context, config: TelegramConfig, body: String, onComplete: (Boolean) -> Unit = {}): Boolean {
+    fun send(context: Context, config: TelegramConfig, body: String, onComplete: (Boolean) -> Unit = {}, timeoutMs: Long = COMPLETION_TIMEOUT_MS): Boolean {
         val app = context.applicationContext
         if (!config.hasCredentials) {
             LogUtils.addToLog(app, "SEND FAILED [Telegram] → missing config")
             onComplete(false)
             return false
         }
+        val budget = timeoutMs.coerceIn(1, COMPLETION_TIMEOUT_MS)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budget)
         return sendExecutor.executeWithDeadline(
-            timeoutMs = COMPLETION_TIMEOUT_MS,
-            block = { postSync(config, body) },
+            timeoutMs = budget,
+            block = {
+                val remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+                if (remaining <= 0) {
+                    throw TimeoutException()
+                }
+                postSync(config, body, minOf(8_000, remaining))
+            },
         ) { outcome ->
             var success = false
             try {
@@ -50,8 +58,8 @@ object TelegramChannel {
                         LogUtils.addToLog(app, "SEND FAILED [Telegram] → chat ${config.chatId} (completion timeout; delivery unknown)")
                     }
                     else -> {
-                        // The bot token lives in the request URL, and HttpURLConnection exceptions
-                        // (FileNotFoundException, SSL/IO errors) can embed that full URL — so redact
+                        // The bot token lives in the request URL, and transport exceptions
+                        // can embed that full URL, so redact
                         // both the raw token and its URL-encoded form before logging.
                         val msg = redactSecret(outcome.exceptionOrNull()?.message.orEmpty(), config.botToken)
                         LogUtils.addToLog(app, "SEND FAILED [Telegram] → chat ${config.chatId} (transport) $msg".trimEnd())
@@ -78,7 +86,7 @@ object TelegramChannel {
         return text.replace(secret, "[redacted]").replace(encoded, "[redacted]")
     }
 
-    private fun postSync(config: TelegramConfig, body: String): Outcome {
+    private fun postSync(config: TelegramConfig, body: String, callTimeoutMs: Long): Outcome {
         // Bot tokens are of the form `{bot_id}:{secret}`; URL-encode just in case the
         // user accidentally pastes a token with stray padding characters.
         val encodedToken = URLEncoder.encode(config.botToken, "UTF-8")
@@ -89,7 +97,7 @@ object TelegramChannel {
             .put("disable_web_page_preview", true)
             .toString()
             .toByteArray(Charsets.UTF_8)
-        val result = HttpJsonClient.postJson(url, payload, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS)
+        val result = HttpJsonClient.postJson(url, payload, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, callTimeoutMs = callTimeoutMs)
         val summary = if (result.success) null else summarizeError(result.errorBody, config.botToken)
         return Outcome(result.statusCode, result.success, summary)
     }

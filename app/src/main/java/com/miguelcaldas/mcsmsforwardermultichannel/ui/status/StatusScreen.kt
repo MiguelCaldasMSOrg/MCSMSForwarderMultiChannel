@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -57,10 +58,11 @@ import com.miguelcaldas.mcsmsforwardermultichannel.R
 import com.miguelcaldas.mcsmsforwardermultichannel.util.BuildMetadata
 import kotlinx.coroutines.launch
 
-internal fun HealthAction.runtimePermission(): String? = when (this) {
+internal fun HealthAction.runtimePermission(sdkInt: Int): String? = when (this) {
     HealthAction.GRANT_RECEIVE_SMS -> Manifest.permission.RECEIVE_SMS
     HealthAction.GRANT_SEND_SMS -> Manifest.permission.SEND_SMS
-    HealthAction.GRANT_NOTIFICATIONS -> Manifest.permission.POST_NOTIFICATIONS
+    HealthAction.GRANT_NOTIFICATIONS -> if (sdkInt >= 33) Manifest.permission.POST_NOTIFICATIONS else null
+    HealthAction.OPEN_NOTIFICATION_SETTINGS,
     HealthAction.BATTERY_SETTINGS,
     HealthAction.OPEN_CHANNELS,
     HealthAction.OPEN_FILTERS,
@@ -94,6 +96,15 @@ private fun openApplicationSettings(context: Context): Boolean {
         true
     } catch (_: ActivityNotFoundException) {
         false
+    }
+}
+
+private fun openNotificationSettings(context: Context): Boolean {
+    return try {
+        context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+        true
+    } catch (_: ActivityNotFoundException) {
+        openApplicationSettings(context)
     }
 }
 
@@ -131,13 +142,20 @@ fun StatusScreen(onOpenChannels: () -> Unit, onOpenFilters: () -> Unit, viewMode
     }
 
     fun runHealthAction(action: HealthAction) {
-        val permission = action.runtimePermission()
+        val permission = action.runtimePermission(Build.VERSION.SDK_INT)
         if (permission != null) {
             pendingPermission = permission
             permissionLauncher.launch(permission)
             return
         }
         when (action) {
+            HealthAction.OPEN_NOTIFICATION_SETTINGS -> {
+                if (!openNotificationSettings(context)) {
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Notification settings are unavailable.")
+                    }
+                }
+            }
             HealthAction.BATTERY_SETTINGS -> {
                 if (!requestBatteryOptimizationExemption(context)) {
                     scope.launch {

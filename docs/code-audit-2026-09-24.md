@@ -1,6 +1,51 @@
 # Engineering Audit - 2026-09-24
 
-Status: discussion draft. No commit, push, CI run, service deployment, or real message send was performed during this audit. Existing uncommitted JDK 25 and Status UI changes were preserved. The only production change made by this audit is the credential-redaction fix described below, shared by both release variants.
+Status: historical audit snapshot with a current restart checkpoint below. The findings and measurements describe the original audit; subsequent publication and JDK changes are recorded in the checkpoint. Recommendations remain proposals unless explicitly marked complete.
+
+## Restart Checkpoint
+
+Implementation update (2026-10-01): the Android 11+ release work and the subsequently authorized
+transactional-save, shared/off-main-evaluation, and bounded transport/logging fixes are implemented
+for v1.0.18. See [the compatibility and hardening guide](android-compatibility.md) for current behavior,
+limits, tests, and retirement steps. The checkpoint and original findings below remain historical.
+
+Saved on 2026-09-24 at the user's request before restarting.
+
+- Branch: `master`; last committed and pushed source: `da57b380435c303b74991a5c2a1366d4838d28c5`. The working tree was clean before this checkpoint edit. This checkpoint is not committed.
+- Latest published release: `v1.0.17`, version code 17, commit `8152b1af68c8055fcd5f742fd0a1e92ec104923d`. Both signed APKs, checksums, and the minified mapping were published and verified.
+- Completed: provider-error redaction before truncation, eight regression tests, Status readiness-row spacing, exact latest-stable Action versions, manual signed-build preflight, and JDK 26 build-runtime adoption. Do not present these as outstanding work.
+- Local Gradle uses system-wide Oracle JDK 26.0.2 at `C:\Program Files\Java\jdk-26.0.2`. Machine `JAVA_HOME` remains `C:\Program Files\Java\jdk-25.0.4.1`; an existing terminal may retain an older value. Project daemon criteria select 26 independently. Do not change persistent environment variables or install another profile JDK.
+- The profile JDK added earlier was removed at the user's request. A subsequent compile confirmed the actual daemon launches from the system-wide JDK 26 while the wrapper launches from JDK 25.
+- GitHub uses Temurin 26.0.2.1. The [JDK 26 signed-build preflight](https://github.com/MiguelCaldasMSOrg/MCSMSForwarderMultiChannel/actions/runs/36058779629) passed tests, lint, both signed release builds, signature checks, and artifact uploads. Publication was skipped; JDK 26 was not retagged as a new application release.
+- Local JDK 26 validation passed all 86 tests in 14 suites, lint, debug, standard release, and minified release builds. Java and Kotlin class-file targets were verified as Java 17.
+- Preserve `targetSdk = 36`, `compileSdk = 37`, and Java/Kotlin bytecode 17. Android 17 standard-OTP restrictions depend on target 37; WebOTP restrictions can apply regardless of target. JDK changes do not alter these policies.
+- No command, deployment, test run, or GitHub workflow is pending. Do not restart completed release/JDK work.
+- The protected repository-local directory remains out of scope, except for the exact credential file under the protocol in the repository instructions. No credential is needed to resume the current discussion.
+
+### Current Discussion: Independent QR Decoding
+
+The user asked first about replacing Google Code Scanner, then about a clean-room pure-Java QR parser. These were feasibility questions. No decoder, camera integration, prototype, or new QR dependency has been implemented or approved for implementation. The app still uses Google Code Scanner 16.1.0.
+
+An independent decoder can accept a QR module matrix or grayscale pixel buffer without Android, Google Play services, ML Kit, or native dependencies. Live camera capture still requires Android camera APIs. Keep decoding, image detection, and camera integration as separate layers, with all decoded provisioning text passed through the existing authenticated parser and passphrase flow.
+
+Proposed prototype scope, not yet agreed:
+
+1. QR Code Model 2, versions 1-40; format/version decoding, mask removal, codeword extraction, Reed-Solomon correction, and numeric/alphanumeric/byte segments used by the provisioning generator.
+2. Initially support the generator's configured error-correction level and explicitly reject unsupported formats; do not claim general QR compatibility prematurely.
+3. Matrix decoding and generated-image tests first, then image detection/perspective handling, then optional live capture. Dense encrypted provisioning codes, rotation, blur, glare, malformed input, and resource limits need tests.
+4. Use specifications and documented provenance for independent code. A formal clean-room process needs specification/test preparation separated from implementation; newly written code alone does not establish that claim. Only project READMEs were consulted for ZXing alternatives, not their decoder source.
+5. Existing encoders can supply black-box synthetic fixtures. Do not consult/copy existing decoder implementations when pursuing this route. Bound allocations, input dimensions, and processing work; never log decoded configuration.
+6. Keep image-file QR import as the minimal integration; live scanning is an additional adapter. Share the decoder and security checks across standard/minified builds and benchmark size, memory, and decoding reliability before replacing the current scanner.
+
+Previously discussed alternatives remain available: ZXing Core plus CameraX, Camera2, or image selection; ZXing-C++ only if benefits justify native binaries. Java ZXing is maintenance-only, while ZXing-C++ is actively developed. Choosing the clean-room path would supersede, not silently implement, those library options.
+
+### Remaining Backlog
+
+Transactional channel saves; consistent configuration snapshots; a shared live/dry-run forwarding engine; end-to-end receiver deadlines; bounded/cancellable HTTP; separate bounded logs with background formatting and file export; memory-only secret drafts and consistent save/discard feedback; stale-test/readiness refresh; shared input/provider limits and long-message policy; process-resilient SMS results and optional SIM selection; physical-path safeguards in provisioning helpers; broader regression/device coverage; remaining release hardening and dependency/API upgrades.
+
+Larger decisions remain open: a durable encrypted outbox, safe-regex mode, remote-command replay/acknowledgment policy, logging privacy defaults, a full default-SMS-handler edition, reduced-feature packaging, or a cloud relay. Proposals must not be restricted to low-impact changes. Preserve a minimal-footprint option without weakening security or silently changing accepted behavior.
+
+Next step: resume the clean-room QR feasibility/scope discussion and outstanding-improvement priorities. Do not infer authorization for implementation, additional commits, pushes, tags, or CI runs from this restart request.
 
 ## Executive Recommendation
 

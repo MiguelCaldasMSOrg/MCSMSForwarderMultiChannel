@@ -44,7 +44,7 @@ The reception, filtering, normalization, multipart handling, and template logic 
 
 ## What is NOT included
 
-- No retry / backoff queue. HTTP sends start concurrently so one slow request does not queue or reject another. Each uses an 8.5-second receiver-facing completion deadline; the underlying connection has 8-second connect/read safeguards and may finish later, in which case delivery is reported as unknown. The SMS channel reports the modem result asynchronously in the log. None of the channels retries.
+- No automatic resend or durable retry queue. HTTP sends use bounded concurrent workers and a short, bounded admission queue. Saturation and expiry are reported explicitly. Each send has an 8.5-second completion limit, reduced to the receiver's remaining nine-second budget; shared OkHttp transport adds total-call and write deadlines. Delivery can remain unknown after timeout. The SMS channel reports modem results asynchronously. None of the channels retries.
 - No webhook server for delivery receipts.
 - No media (image/audio/document) forwarding — text only.
 - **Loop guard is SMS-only.** A message arriving from the SMS forward destination is suppressed so an SMS→SMS echo cannot bounce indefinitely. WhatsApp and Telegram run on a different transport and cannot re-trigger the pipeline, so they need no guard.
@@ -78,13 +78,15 @@ Gradle runs on JDK 26 locally and in release CI, pinned by
 `gradle/gradle-daemon-jvm.properties`. Java and Kotlin bytecode continue to target Java 17 for
 Android compatibility. Install JDK 26 before building locally; it is a non-LTS release.
 
-`compileSdk` 37, `minSdk` 33, `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), and Navigation 2.10.0.
+`compileSdk` 37, `minSdk` 30 (Android 11+), `targetSdk` 36, built-in Kotlin 2.2.10, AGP 9.3.2, Gradle 9.5, Compose BOM 2026.08.00 (including Material 3), and Navigation 2.10.0.
+
+Both regular and minified source builds support Android 11+ without removing core features. Existing published APKs do not gain support until a new release is built. See the [compatibility inventory, retirement guide, and verification limits](docs/android-compatibility.md).
 
 Release signing is opt-in via Gradle properties (`RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`). No keystore is committed.
 
 ### Publishing a release
 
-The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests and lint, builds and verifies both signed APK variants, generates their SHA-256 checksums, and publishes the release assets. The stable links above automatically follow the latest release.
+The [Publish release workflow](.github/workflows/publish-release.yml) runs when a version tag such as `v1.0.3` is pushed. Git tags use the conventional `v` prefix while Android `versionName` remains plain SemVer (`1.0.3`). The workflow strips the tag's leading `v`, verifies that both numeric versions match, and aborts before building if they do not. It then runs the JVM tests and lint, builds and verifies both signed APK variants, and gates publication on the API 30-37 emulator regression matrix. Regular releases receive internal platform/configuration tests; both regular and minified APKs receive isolated UI tests against the exact staged binaries. It publishes the APKs, SHA-256 checksums, and minified mapping only after all required jobs pass. The stable links above automatically follow the latest release.
 
 Before tagging, run the same signed-build validation on GitHub without publishing a release:
 
@@ -92,9 +94,10 @@ Before tagging, run the same signed-build validation on GitHub without publishin
 gh workflow run publish-release.yml --ref master
 ```
 
-The manual run verifies JDK 26, runs tests and lint, signs both APK variants, and uploads verified
-artifacts. The publishing job is skipped for manual runs; only version-tag pushes can create a
-GitHub Release. Both workflows pin their Actions steps to exact stable release versions.
+The manual run verifies JDK 26, runs JVM tests and lint, signs both APK variants, and uploads verified
+artifacts. The full emulator matrix and publishing job are skipped for manual runs; only new
+version-tag pushes run the platform matrix and can create a GitHub Release. Ordinary pushes and
+pull requests do not trigger it. Both workflows pin their Actions steps to exact stable release versions.
 
 Configure these encrypted repository secrets once under **Settings → Secrets and variables → Actions**:
 
@@ -243,11 +246,13 @@ documented `BatteryLife` lint suppression because immediate forwarding is core t
 behavior. If a device has no activity for the platform action, the screen reports that through a
 snackbar instead of silently doing nothing.
 
-**Pipeline** (`SmsReceiver`): incoming SMS → master kill-switch (`mc_sms_fwd_wa`/`master_enabled`, default ON) → bail if no channel is operational (enabled toggle on AND credentials present) → reassemble multipart → SMS loop guard (suppress messages from the SMS forward destination) → match sender via `SenderMatcher` → normalize body via `TextNormalizer.normalizeForMatching` → compile each regex once and match any → apply optional `ForwardTemplate` → `BroadcastReceiver.goAsync()` → fan out the same body to **every operational channel** in parallel. A shared `AtomicInteger` counts pending channel callbacks; once they all complete, the receiver records exactly one stat (if any channel succeeded) and calls `pending.finish()`.
+**Pipeline** (`SmsReceiver`): incoming SMS immediately obtains `goAsync()` and a nine-second completion guard, then bounded background workers reassemble multipart data and intercept reserved remote commands before ordinary gates. Ordinary forwarding loads one immutable configuration snapshot under the same lock as configuration writers, applies the master/channel gates and SMS loop guard, then uses the shared live/dry-run evaluator for sender/message matching and template expansion. It fans the same body out to every operational channel. Pending channel callbacks retain the exactly-once successful-forward count; receiver completion is independently guarded against timeout/rejection/double finish. Changing settings affects subsequent admission, not a send already admitted with its snapshot.
 
-`WhatsAppCloudChannel`, `TelegramChannel`, and `SmsChannel` are sibling singletons. The two HTTP channels share `HttpJsonClient` (a thin `HttpURLConnection` wrapper) and start each request immediately on cached daemon executors (`wa-sender` / `tg-sender`), so overlapping sends run concurrently rather than waiting or being rejected. Each has an 8.5-second completion deadline plus 8-second connect/read safeguards. A request still unwinding after the completion deadline is logged as having unknown delivery and no longer holds the SMS broadcast open. Each channel reports `SEND OK`/`SEND FAILED` with the HTTP status and provider-specific error summary (Meta `error.{code,type,message}` for WhatsApp, Telegram `error_code` + `description` for Telegram). Neither ever logs its bearer/bot token. `SmsChannel` dispatches through `SmsManager.sendMultipartTextMessage` and registers a private result receiver that logs the modem's per-segment outcome. Stats are owned solely by `SmsReceiver` — the channels only log.
+`WhatsAppCloudChannel`, `TelegramChannel`, and `SmsChannel` remain sibling singletons. HTTP channels share an OkHttp-backed `HttpJsonClient`, pooled connections, total/write timeouts, and disabled redirects/automatic retries. Each has eight workers and at most 32 queued requests. Completion capacity is reserved before admission, and expired queued work never starts. Error bodies above 64 KiB are omitted entirely before logging; they are never truncated into a potentially unredactable token prefix. Expanded messages are capped at 256 Ki characters and HTTP JSON requests at 1 MiB, with explicit failures rather than partial sends. SMS handoff and asynchronous segment-result semantics are unchanged. Stats remain receiver-owned; launcher badge updates are coalesced separately from the statistics lock.
 
-Secrets (the WhatsApp access token and Telegram bot token) are encrypted by the `SecureStore` singleton with AES/GCM using a key held by Android Keystore, then stored in the private `mc_sms_fwd_secure` preferences file. `WhatsAppConfig.load` / `TelegramConfig.load` take a `Context` so they can read those tokens; everything else (toggles, phone numbers, chat IDs, lists, logs, stats) stays in the plaintext `mc_sms_fwd_wa` prefs.
+Secrets (WhatsApp/Telegram tokens and the remote-command HMAC key) remain AES/GCM encrypted in `mc_sms_fwd_secure` using Android Keystore. Manual channel saves reuse provisioning's checked disable/write/restore transaction, preserve untouched token ciphertext, and keep drafts visible on failure. Typed tokens stay in memory-only ViewModel state across rotation, never saved-instance-state Bundles. Toggles, phone numbers, chat IDs, rules, and statistics remain in `mc_sms_fwd_wa`; logs migrate to `mc_sms_fwd_log`, and transient badges remain in the backup-excluded `mc_sms_fwd_badge` store.
+
+Logs retain whole entries up to 35 days, 2,000 entries, or 4 MiB of UTF-8 log data, whichever is reached first. Pending logging is capped at 128 operations/1 MiB and batched; overload omissions are summarized, and entries above 512 KiB receive an omission marker. Formatting/filtering run off-main. Share exports the current filtered view as a text file through a private FileProvider; at most eight cached exports are retained. The limits, removal checklist, and release-time verification policy are documented in [the compatibility guide](docs/android-compatibility.md).
 
 ## License
 

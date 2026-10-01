@@ -19,13 +19,13 @@ import javax.crypto.spec.SecretKeySpec
 internal data class ProvisionedWhatsApp(
     val enabled: Boolean,
     val phoneNumberId: String,
-    val accessToken: String,
+    val accessToken: String?,
     val recipient: String,
 )
 
 internal data class ProvisionedTelegram(
     val enabled: Boolean,
-    val botToken: String,
+    val botToken: String?,
     val chatId: String,
 )
 
@@ -205,17 +205,17 @@ internal object ProvisioningBundle {
     private fun saveLocked(context: Context, configuration: ProvisionedConfiguration): String {
         val prefs = context.getSharedPreferences(WhatsAppConfig.PREFS_NAME, Context.MODE_PRIVATE)
         val secretUpdates = buildMap {
-            configuration.whatsApp?.let {
-                put(SecureStore.KEY_WA_ACCESS_TOKEN, it.accessToken)
+            configuration.whatsApp?.accessToken?.let {
+                put(SecureStore.KEY_WA_ACCESS_TOKEN, it)
             }
-            configuration.telegram?.let {
-                put(SecureStore.KEY_TG_BOT_TOKEN, it.botToken)
+            configuration.telegram?.botToken?.let {
+                put(SecureStore.KEY_TG_BOT_TOKEN, it)
             }
             configuration.remoteSmsRules?.let {
                 put(SecureStore.KEY_REMOTE_SMS_HMAC, it.hmacKey)
             }
         }
-        val previousSecrets = secretUpdates.keys.associateWith { SecureStore.read(context, it) }
+        val previousSecrets = if (secretUpdates.isEmpty()) null else SecureStore.snapshotEncrypted(context, secretUpdates.keys)
         val previousMasterEnabled = MasterSwitchStore.load(prefs)
         val countryIso = SenderMatcher.deviceCountryIso(context)
         val mergedSenders = configuration.filters?.allowedSenders?.let { additions ->
@@ -406,16 +406,16 @@ internal object ProvisioningBundle {
     private fun rollbackAfterSaveFailure(
         context: Context,
         prefs: android.content.SharedPreferences,
-        previousSecrets: Map<String, String>,
+        previousSecrets: PreferenceSnapshot?,
         previousPreferences: PreferenceSnapshot,
         enabledKeys: Set<String>,
         cause: Throwable,
     ): Nothing {
         val failure = ProvisioningException("Android could not save the imported configuration.", cause)
-        var secretsRestored = previousSecrets.isEmpty()
-        if (previousSecrets.isNotEmpty()) {
+        var secretsRestored = previousSecrets == null
+        if (previousSecrets != null) {
             try {
-                SecureStore.writeAll(context, previousSecrets)
+            SecureStore.restoreEncrypted(context, previousSecrets)
                 secretsRestored = true
             } catch (rollbackError: GeneralSecurityException) {
                 failure.addSuppressed(rollbackError)

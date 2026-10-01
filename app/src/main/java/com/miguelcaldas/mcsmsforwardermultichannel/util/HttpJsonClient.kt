@@ -1,17 +1,25 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.util
 
-import java.net.HttpURLConnection
-import java.net.URL
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.util.concurrent.TimeUnit
+import okhttp3.ConnectionPool
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
- * Minimal shared HTTP-JSON POST plumbing for the WhatsApp and Telegram channels.
+ * Shared bounded HTTP-JSON POST transport for the WhatsApp and Telegram channels.
  *
- * It only owns the transport mechanics (connection setup, timeouts, writing the
- * body, reading the status and error stream). Each channel keeps its own payload
+ * Owns connection pooling, total/write deadlines and bounded error reads. Each channel keeps its payload
  * building, provider-specific error summarizing, and secret redaction so this stays
  * free of any credential handling.
  */
 object HttpJsonClient {
+    private const val MAX_ERROR_BYTES = 64 * 1024
+    private const val OVERSIZED_ERROR = "Provider error response exceeded the diagnostic limit; body omitted."
+    private val client = OkHttpClient.Builder().connectionPool(ConnectionPool(4, 2, TimeUnit.MINUTES)).retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build()
 
     /**
      * Result of a POST. [errorBody] holds the raw response body **only when the request
@@ -24,32 +32,31 @@ object HttpJsonClient {
      * transport failure (DNS, TLS, timeout) so the caller can distinguish a transport
      * error from an HTTP error response.
      */
-    fun postJson(url: String, payload: ByteArray, connectTimeoutMs: Int, readTimeoutMs: Int, headers: Map<String, String> = emptyMap()): Result {
-        val conn = (URL(url).openConnection() as HttpURLConnection)
-        try {
-            conn.requestMethod = "POST"
-            conn.connectTimeout = connectTimeoutMs
-            conn.readTimeout = readTimeoutMs
-            conn.doOutput = true
-            conn.useCaches = false
-            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("Accept", "application/json")
-            headers.forEach { (name, value) ->
-                conn.setRequestProperty(name, value)
+    fun postJson(url: String, payload: ByteArray, connectTimeoutMs: Int, readTimeoutMs: Int, headers: Map<String, String> = emptyMap(), callTimeoutMs: Long = 8_000): Result {
+        require(payload.size <= 1024 * 1024) { "Provider request exceeds the 1 MiB limit" }
+        val transport = client.newBuilder().connectTimeout(connectTimeoutMs.toLong(), TimeUnit.MILLISECONDS).readTimeout(readTimeoutMs.toLong(), TimeUnit.MILLISECONDS).writeTimeout(readTimeoutMs.toLong(), TimeUnit.MILLISECONDS).callTimeout(callTimeoutMs.coerceAtLeast(1), TimeUnit.MILLISECONDS).build()
+        val request = Request.Builder().url(url).header("Accept", "application/json").post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+        headers.forEach { (name, value) ->
+            request.header(name, value)
+        }
+        transport.newCall(request.build()).execute().use { response ->
+            val error = if (response.isSuccessful) "" else readErrorBody(response.body.byteStream())
+            return Result(response.code, response.isSuccessful, error)
+        }
+    }
+
+    internal fun readErrorBody(stream: InputStream, maximumBytes: Int = MAX_ERROR_BYTES): String {
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(minOf(4096, maximumBytes + 1))
+        while (true) {
+            val count = stream.read(buffer, 0, minOf(buffer.size, maximumBytes - output.size() + 1))
+            if (count < 0) {
+                return output.toString(Charsets.UTF_8.name())
             }
-            conn.setFixedLengthStreamingMode(payload.size)
-            conn.outputStream.use { it.write(payload) }
-            val code = conn.responseCode
-            val success = code in 200..299
-            val errorBody = if (success) {
-                ""
-            } else {
-                val stream = conn.errorStream ?: conn.inputStream
-                stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (count > maximumBytes - output.size()) {
+                return OVERSIZED_ERROR
             }
-            return Result(code, success, errorBody)
-        } finally {
-            conn.disconnect()
+            output.write(buffer, 0, count)
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.miguelcaldas.mcsmsforwardermultichannel.ui.channels
 
 import android.telephony.PhoneNumberUtils
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.miguelcaldas.mcsmsforwardermultichannel.R
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SmsConfig
 import com.miguelcaldas.mcsmsforwardermultichannel.util.TelegramConfig
@@ -52,6 +54,8 @@ import kotlinx.coroutines.launch
 fun ChannelDetailScreen(type: ChannelType, onBack: () -> Unit, viewModel: ChannelsViewModel = viewModel()) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val isSaving by viewModel.isSaving.collectAsStateWithLifecycle()
+    BackHandler(enabled = isSaving) { }
 
     fun toast(message: String) {
         scope.launch {
@@ -65,7 +69,7 @@ fun ChannelDetailScreen(type: ChannelType, onBack: () -> Unit, viewModel: Channe
             TopAppBar(
                 title = { Text(type.title) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = onBack, enabled = !isSaving) {
                         Icon(painterResource(R.drawable.ic_arrow_back_24), contentDescription = "Back")
                     }
                 },
@@ -91,13 +95,14 @@ fun ChannelDetailScreen(type: ChannelType, onBack: () -> Unit, viewModel: Channe
 }
 
 @Composable
-private fun EnabledRow(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+private fun EnabledRow(enabled: Boolean, editable: Boolean, onToggle: (Boolean) -> Unit) {
     ListItem(
         headlineContent = { Text("Enabled") },
         supportingContent = { Text("Forward matching messages through this channel.") },
         trailingContent = {
             Switch(
                 checked = enabled,
+                enabled = editable,
                 onCheckedChange = { checked ->
                     onToggle(checked)
                 },
@@ -109,20 +114,22 @@ private fun EnabledRow(enabled: Boolean, onToggle: (Boolean) -> Unit) {
 @Composable
 private fun WhatsAppForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toast: (String) -> Unit) {
     val context = LocalContext.current
+    val isSaving by viewModel.isSaving.collectAsStateWithLifecycle()
     val initial = remember { WhatsAppConfig.load(context) }
     // The field is pre-filled with a bullet mask the same length as the stored token.
     // Leaving the mask untouched keeps the saved token; clearing it deletes the token;
-    // typing over it replaces the token. The real secret never enters Compose state.
+    // typing over it replaces the token. Newly typed secrets remain memory-only.
     val tokenMask = remember { "\u2022".repeat(initial.accessToken.length) }
 
     var enabled by rememberSaveable { mutableStateOf(initial.enabled) }
     var phoneNumberId by rememberSaveable { mutableStateOf(initial.phoneNumberId) }
     var recipient by rememberSaveable { mutableStateOf(initial.recipient) }
-    var token by rememberSaveable { mutableStateOf(tokenMask) }
+    val tokenDraft by viewModel.tokenDraft.collectAsStateWithLifecycle()
+    val token = tokenDraft ?: tokenMask
 
     val recipientError = recipient.isNotEmpty() && !PhoneNumberUtils.isWellFormedSmsAddress(recipient)
 
-    EnabledRow(enabled) { checked ->
+    EnabledRow(enabled, !isSaving) { checked ->
         enabled = checked
     }
 
@@ -130,13 +137,15 @@ private fun WhatsAppForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
         value = phoneNumberId,
         onValueChange = { phoneNumberId = it },
         label = { Text("WhatsApp Phone Number ID") },
+        enabled = !isSaving,
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
     OutlinedTextField(
         value = token,
-        onValueChange = { token = it },
+        onValueChange = viewModel::updateTokenDraft,
         label = { Text("Access token") },
+        enabled = !isSaving,
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -146,6 +155,7 @@ private fun WhatsAppForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
         value = recipient,
         onValueChange = { recipient = it },
         label = { Text("WhatsApp Recipient Phone Number") },
+        enabled = !isSaving,
         singleLine = true,
         isError = recipientError,
         supportingText = if (recipientError) {
@@ -158,13 +168,19 @@ private fun WhatsAppForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
     )
 
     FormActions(
+        enabled = !isSaving,
         onTest = {
             val testToken = if (token == tokenMask) initial.accessToken else token
             toast(viewModel.sendWhatsAppTest(phoneNumberId, recipient, testToken))
         },
         onSave = {
-            viewModel.saveWhatsApp(enabled, phoneNumberId, recipient, if (token != tokenMask) token else null)
-            onSaved()
+            viewModel.saveWhatsApp(enabled, phoneNumberId, recipient, if (token != tokenMask) token else null) { result ->
+                if (result.isSuccess) {
+                    onSaved()
+                } else {
+                    toast("Could not save channel settings. Your draft has been kept; check device storage and try again.")
+                }
+            }
         },
     )
 }
@@ -172,21 +188,24 @@ private fun WhatsAppForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
 @Composable
 private fun TelegramForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toast: (String) -> Unit) {
     val context = LocalContext.current
+    val isSaving by viewModel.isSaving.collectAsStateWithLifecycle()
     val initial = remember { TelegramConfig.load(context) }
     val tokenMask = remember { "\u2022".repeat(initial.botToken.length) }
 
     var enabled by rememberSaveable { mutableStateOf(initial.enabled) }
     var chatId by rememberSaveable { mutableStateOf(initial.chatId) }
-    var token by rememberSaveable { mutableStateOf(tokenMask) }
+    val tokenDraft by viewModel.tokenDraft.collectAsStateWithLifecycle()
+    val token = tokenDraft ?: tokenMask
 
-    EnabledRow(enabled) { checked ->
+    EnabledRow(enabled, !isSaving) { checked ->
         enabled = checked
     }
 
     OutlinedTextField(
         value = token,
-        onValueChange = { token = it },
+        onValueChange = viewModel::updateTokenDraft,
         label = { Text("Bot token") },
+        enabled = !isSaving,
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -199,18 +218,25 @@ private fun TelegramForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
         value = chatId,
         onValueChange = { chatId = it },
         label = { Text("Chat ID") },
+        enabled = !isSaving,
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
 
     FormActions(
+        enabled = !isSaving,
         onTest = {
             val testToken = if (token == tokenMask) initial.botToken else token
             toast(viewModel.sendTelegramTest(chatId, testToken))
         },
         onSave = {
-            viewModel.saveTelegram(enabled, chatId, if (token != tokenMask) token else null)
-            onSaved()
+            viewModel.saveTelegram(enabled, chatId, if (token != tokenMask) token else null) { result ->
+                if (result.isSuccess) {
+                    onSaved()
+                } else {
+                    toast("Could not save channel settings. Your draft has been kept; check device storage and try again.")
+                }
+            }
         },
     )
 }
@@ -218,6 +244,7 @@ private fun TelegramForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toas
 @Composable
 private fun SmsForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toast: (String) -> Unit) {
     val context = LocalContext.current
+    val isSaving by viewModel.isSaving.collectAsStateWithLifecycle()
     val prefs = remember { context.getSharedPreferences("mc_sms_fwd_wa", android.content.Context.MODE_PRIVATE) }
     val initial = remember { SmsConfig.load(prefs) }
 
@@ -226,7 +253,7 @@ private fun SmsForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toast: (S
 
     val destinationError = destination.isNotEmpty() && !PhoneNumberUtils.isWellFormedSmsAddress(destination)
 
-    EnabledRow(enabled) { checked ->
+    EnabledRow(enabled, !isSaving) { checked ->
         enabled = checked
     }
 
@@ -234,6 +261,7 @@ private fun SmsForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toast: (S
         value = destination,
         onValueChange = { destination = it },
         label = { Text("Destination (E.164)") },
+        enabled = !isSaving,
         singleLine = true,
         isError = destinationError,
         supportingText = if (destinationError) {
@@ -246,21 +274,25 @@ private fun SmsForm(viewModel: ChannelsViewModel, onSaved: () -> Unit, toast: (S
     )
 
     FormActions(
+        enabled = !isSaving,
         onTest = {
             toast(viewModel.sendSmsTest(destination))
         },
         onSave = {
-            val warning = viewModel.saveSms(enabled, destination)
-            if (warning != null) {
-                toast(warning)
+            viewModel.saveSms(enabled, destination) { result ->
+                if (result.isSuccess) {
+                    result.getOrNull()?.let(toast)
+                    onSaved()
+                } else {
+                    toast("Could not save channel settings. Your draft has been kept; check device storage and try again.")
+                }
             }
-            onSaved()
         },
     )
 }
 
 @Composable
-private fun FormActions(onTest: () -> Unit, onSave: () -> Unit) {
+private fun FormActions(enabled: Boolean, onTest: () -> Unit, onSave: () -> Unit) {
     Spacer(Modifier.height(4.dp))
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -268,12 +300,14 @@ private fun FormActions(onTest: () -> Unit, onSave: () -> Unit) {
     ) {
         OutlinedButton(
             onClick = onTest,
+            enabled = enabled,
             modifier = Modifier.weight(1f),
         ) {
             Text("Send test")
         }
         Button(
             onClick = onSave,
+            enabled = enabled,
             modifier = Modifier.weight(1f),
         ) {
             Text("Save")

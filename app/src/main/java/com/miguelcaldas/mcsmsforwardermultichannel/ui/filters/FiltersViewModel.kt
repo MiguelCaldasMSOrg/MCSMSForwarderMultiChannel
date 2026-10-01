@@ -3,12 +3,14 @@ package com.miguelcaldas.mcsmsforwardermultichannel.ui.filters
 import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
-import android.telephony.PhoneNumberUtils
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import com.miguelcaldas.mcsmsforwardermultichannel.util.FilterRuleMutationCoordinator
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardTemplate
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardingConfiguration
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardingEvaluator
 import com.miguelcaldas.mcsmsforwardermultichannel.util.InboundFilterDecision
+import com.miguelcaldas.mcsmsforwardermultichannel.util.PhoneNumberCompat
 import com.miguelcaldas.mcsmsforwardermultichannel.util.PreferenceSnapshot
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RegexListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.RemoteSmsRulesConfig
@@ -224,10 +226,7 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         return trimmed.startsWith("+") || trimmed.firstOrNull()?.isDigit() == true
     }
 
-    // Dry-run mirror of SmsReceiver's pipeline, evaluated against the *currently displayed*
-    // (possibly unsaved) draft filters. Keep this in lockstep with the live receiver: the
-    // sender must be allowed, the message must match at least one rule, and at least one
-    // channel must be operational (toggle on AND credentials complete). Nothing is sent.
+    // Shared forwarding evaluation using the displayed draft; never sends or checks remote commands.
     fun runTest(senderRaw: String, messageRaw: String): TestOutcome {
         val context = getApplication<Application>()
         val sender = senderRaw.trim()
@@ -247,20 +246,18 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
         val rules = _rules.value.filter { it.isNotBlank() }
         val template = _template.value
 
-        val iso = SenderMatcher.deviceCountryIso(context)
-        val senderAllowed = allowedSenders.isNotEmpty() && SenderMatcher.matches(allowedSenders, sender, iso)
-
-        val normalized = TextNormalizer.normalizeForMatching(message)
-        // Same as the receiver: compile each rule at most once, silently skip invalid ones, match any.
-        val ruleMatches = rules.isNotEmpty() && rules.asSequence()
-            .mapNotNull { runCatching { Regex(it) }.getOrNull() }
-            .any { it.containsMatchIn(normalized) }
-
-        val waConfig = WhatsAppConfig.load(context)
-        val tgConfig = TelegramConfig.load(context)
-        val smsConfig = SmsConfig.load(prefs)
-        val suppressedByLoopGuard = smsConfig.isOperational &&
-            PhoneNumberUtils.areSamePhoneNumber(sender, smsConfig.destination, iso)
+        val configuration = ForwardingConfiguration.load(context).copy(senders = allowedSenders.toList(), rules = rules.toList(), template = template)
+        val evaluation = try {
+            ForwardingEvaluator.evaluate(configuration, sender, message, System.currentTimeMillis())
+        } catch (_: IllegalArgumentException) {
+            return TestOutcome("Would not forward: expanded message exceeds the size limit.", Tone.NEUTRAL)
+        }
+        val senderAllowed = evaluation.senderMatches
+        val ruleMatches = evaluation.messageMatches
+        val waConfig = configuration.whatsApp
+        val tgConfig = configuration.telegram
+        val smsConfig = configuration.sms
+        val suppressedByLoopGuard = evaluation.suppressedByLoopGuard
         val operationalChannels = buildList {
             if (waConfig.isOperational) {
                 add("WhatsApp ${waConfig.recipient}")
@@ -273,8 +270,8 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        val outgoingBody = if (template.isEmpty()) message else ForwardTemplate.apply(template, sender, System.currentTimeMillis(), message)
-        val filterDecision = decideInboundFilter(senderAllowed, ruleMatches)
+        val outgoingBody = evaluation.outgoingBody
+        val filterDecision = evaluation.decision
         val wouldSend = !suppressedByLoopGuard &&
             filterDecision == InboundFilterDecision.FORWARD &&
             operationalChannels.isNotEmpty()
@@ -362,7 +359,7 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
                 ),
             )
             val previousRemoteSmsKey = if (draft.remoteSmsKeyChanged) {
-                SecureStore.read(getApplication(), SecureStore.KEY_REMOTE_SMS_HMAC)
+                SecureStore.snapshotEncrypted(getApplication(), setOf(SecureStore.KEY_REMOTE_SMS_HMAC))
             } else {
                 null
             }
@@ -443,18 +440,13 @@ class FiltersViewModel(application: Application) : AndroidViewModel(application)
     @SuppressLint("UseKtx")
     private fun rollbackFailedSave(
         previousPreferences: PreferenceSnapshot,
-        previousRemoteSmsKey: String?,
+        previousRemoteSmsKey: PreferenceSnapshot?,
         remoteSmsKeyChanged: Boolean,
     ): SaveAttempt {
         var restored = true
         if (remoteSmsKeyChanged) {
             try {
-                SecureStore.writeAll(
-                    getApplication(),
-                    mapOf(
-                        SecureStore.KEY_REMOTE_SMS_HMAC to previousRemoteSmsKey.orEmpty(),
-                    ),
-                )
+                SecureStore.restoreEncrypted(getApplication(), checkNotNull(previousRemoteSmsKey))
             } catch (_: GeneralSecurityException) {
                 restored = false
             } catch (_: ProviderException) {

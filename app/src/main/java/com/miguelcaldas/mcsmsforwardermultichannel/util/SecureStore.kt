@@ -46,6 +46,12 @@ object SecureStore {
     /** True when a non-empty secret is stored under [key]. */
     fun has(context: Context, key: String): Boolean = read(context, key).isNotEmpty()
 
+    internal fun snapshotEncrypted(context: Context, keys: Set<String>): PreferenceSnapshot = PreferenceSnapshot.capture(prefs(context), keys)
+
+    internal fun restoreEncrypted(context: Context, snapshot: PreferenceSnapshot) {
+        snapshot.restore(prefs(context))
+    }
+
     /** Returns the stored secret, or an empty string when unset. */
     fun read(context: Context, key: String): String =
         prefs(context).getString(key, null)?.let { decrypt(it) }.orEmpty()

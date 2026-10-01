@@ -7,6 +7,32 @@ import org.junit.Test
 
 class SenderRuleTest {
     @Test
+    fun android11PhoneMatchingPreservesNationalAndInternationalEquivalence() {
+        assertTrue(PhoneNumberCompat.areSameOnAndroid11("+351 912 345 678", "912345678", "pt"))
+        assertTrue(PhoneNumberCompat.areSameOnAndroid11("00351 912345678", "+351912345678", "PT"))
+        assertTrue(PhoneNumberCompat.areSameOnAndroid11("+1 202 555 0123", "(202) 555-0123", "us"))
+        assertTrue(PhoneNumberCompat.areSameOnAndroid11("+44 20 7946 0123", "020 7946 0123", "gb"))
+        assertTrue(PhoneNumberCompat.areSameOnAndroid11("+39 02 12345678", "02 12345678", "it"))
+        assertTrue(PhoneNumberCompat.areSameOnAndroid11("12345", "123 45", "pt"))
+    }
+
+    @Test
+    fun android11PhoneMatchingRejectsSuffixCountryAndExtensionConflicts() {
+        assertFalse(PhoneNumberCompat.areSameOnAndroid11("+1 202 555 0123", "5550123", "us"))
+        assertFalse(PhoneNumberCompat.areSameOnAndroid11("+1 202 555 0123", "+44 202 555 0123", "us"))
+        assertFalse(PhoneNumberCompat.areSameOnAndroid11("+1 202 555 0123 ext 1", "+1 202 555 0123 ext 2", "us"))
+        assertFalse(PhoneNumberCompat.areSameOnAndroid11("bank", "bank", "pt"))
+        assertFalse(PhoneNumberCompat.areSameOnAndroid11("", "", "pt"))
+        assertFalse(PhoneNumberCompat.areSameOnAndroid11("912345678", "912345678", ""))
+    }
+
+    @Test
+    fun android11PhoneMatchingAllowsInternationalNumbersWithoutARegion() {
+        assertTrue(PhoneNumberCompat.areSameOnAndroid11("+351912345678", "+351 912 345 678", ""))
+        assertTrue(PhoneNumberCompat.areSameOnAndroid11("+1 202 555 0123 ext 1", "+1 202 555 0123", "us"))
+    }
+
+    @Test
     fun senderStorageRequiresAlignedModeFlags() {
         assertEquals(
             listOf(

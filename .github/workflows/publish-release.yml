@@ -86,6 +86,26 @@ jobs:
       - name: Run unit tests, lint, and assemble both signed release APKs
         run: ./gradlew :app:testDebugUnitTest :app:lint :app:assembleRelease :app:assembleMinifiedRelease --no-daemon
 
+      - name: Build instrumentation APKs for the release matrix
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          ./gradlew :app:assembleRelease :app:assembleReleaseAndroidTest -PandroidTestBuildType=release --no-daemon
+          ./gradlew :device-tests:assembleDebug --no-daemon
+          mkdir -p release-device-tests/regular release-device-tests/minified
+          cp app/build/outputs/apk/release/app-release.apk release-device-tests/regular/app.apk
+          cp app/build/outputs/apk/androidTest/release/app-release-androidTest.apk release-device-tests/regular/test.apk
+          cp app/build/outputs/apk/minifiedRelease/app-minifiedRelease.apk release-device-tests/minified/app.apk
+          cp device-tests/build/outputs/apk/debug/device-tests-debug.apk release-device-tests/ui-test.apk
+
+      - name: Upload release device-test artifacts
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: release-device-tests-${{ github.ref_name }}
+          path: release-device-tests/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload private R8 diagnostics
         uses: actions/upload-artifact@v7.0.1
         with:
@@ -99,12 +119,19 @@ jobs:
           standard_apk="app/build/outputs/apk/release/app-release.apk"
           minified_apk="app/build/outputs/apk/minifiedRelease/app-minifiedRelease.apk"
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          aapt=$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -n 1)
 
           test -f "$standard_apk"
           test -f "$minified_apk"
           test -n "$apksigner"
+          test -n "$aapt"
           "$apksigner" verify "$standard_apk"
           "$apksigner" verify "$minified_apk"
+          minimum_sdk=$(python3 -c 'import tomllib; print(tomllib.load(open("gradle/libs.versions.toml", "rb"))["versions"]["minSdk"])')
+          for apk in "$standard_apk" "$minified_apk"; do
+            badging=$("$aapt" dump badging "$apk")
+            grep -Eq "^(minSdkVersion|sdkVersion):'${minimum_sdk}'$" <<< "$badging"
+          done
 
           mkdir release-assets
           cp "$standard_apk" release-assets/MC.SMS.Forwarder.apk
@@ -126,9 +153,58 @@ jobs:
             release-assets/MC.SMS.Forwarder.minified.mapping.txt.gz
           if-no-files-found: error
 
+  release-device-tests:
+    name: Android API ${{ matrix.api-level }} / ${{ matrix.variant }}
+    needs: build-release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [30, 31, 32, 33, 34, 35, 36, 37]
+        variant: [regular, minified]
+    steps:
+      - name: Checkout test driver
+        uses: actions/checkout@v7.0.1
+
+      - name: Download exact release APKs and instrumentation
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: release-device-tests-${{ github.ref_name }}
+          path: release-device-tests
+
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test released APK on Android
+        uses: ReactiveCircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: ${{ matrix.api-level == 37 && '37.0' || format('{0}', matrix.api-level) }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048 -camera-back none -camera-front none
+          script: bash tools/Run-ReleaseDeviceTests.sh ${{ matrix.variant }} ${{ matrix.api-level }}
+
+      - name: Upload device-test evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: android-${{ matrix.api-level }}-${{ matrix.variant }}-${{ github.ref_name }}
+          path: device-test-results/
+          if-no-files-found: warn
+          retention-days: 30
+
   publish-artifacts:
     name: Publish GitHub release assets
-    needs: build-release
+    needs: [build-release, release-device-tests]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write

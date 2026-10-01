@@ -28,8 +28,10 @@ object SenderListStore {
     }
 
     fun save(prefs: SharedPreferences, senders: List<SenderRule>) {
-        prefs.edit {
-            write(this, senders)
+        FilterRuleMutationCoordinator.withLock {
+            prefs.edit {
+                write(this, senders)
+            }
         }
     }
 

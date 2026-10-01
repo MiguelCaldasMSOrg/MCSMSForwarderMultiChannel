@@ -9,8 +9,15 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.miguelcaldas.mcsmsforwardermultichannel.R
 import com.miguelcaldas.mcsmsforwardermultichannel.util.LogUtils
+import com.miguelcaldas.mcsmsforwardermultichannel.util.FilterRuleMutationCoordinator
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ForwardingConfiguration
+import com.miguelcaldas.mcsmsforwardermultichannel.util.PreferenceSnapshot
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ProvisioningBundle
 import com.miguelcaldas.mcsmsforwardermultichannel.util.ProvisioningException
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ProvisionedConfiguration
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ProvisionedSms
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ProvisionedTelegram
+import com.miguelcaldas.mcsmsforwardermultichannel.util.ProvisionedWhatsApp
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SecureStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderListStore
 import com.miguelcaldas.mcsmsforwardermultichannel.util.SenderMatcher
@@ -63,12 +70,26 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
     private val _provisioningImportState = MutableStateFlow<ProvisioningImportState>(ProvisioningImportState.Idle)
     val provisioningImportState: StateFlow<ProvisioningImportState> = _provisioningImportState.asStateFlow()
 
+    private val _isSaving = MutableStateFlow(false)
+    val isSaving: StateFlow<Boolean> = _isSaving.asStateFlow()
+    private val _tokenDraft = MutableStateFlow<String?>(null)
+    val tokenDraft: StateFlow<String?> = _tokenDraft.asStateFlow()
+
+    fun updateTokenDraft(value: String) {
+        _tokenDraft.value = value
+    }
+
+    override fun onCleared() {
+        _tokenDraft.value = null
+    }
+
     /** Recompute every channel summary. Call on resume and after any edit. */
     fun refresh() {
         val context = getApplication<Application>()
-        val wa = WhatsAppConfig.load(context)
-        val tg = TelegramConfig.load(context)
-        val sms = SmsConfig.load(prefs)
+        val configuration = ForwardingConfiguration.load(context)
+        val wa = configuration.whatsApp
+        val tg = configuration.telegram
+        val sms = configuration.sms
 
         _channels.value = listOf(
             summary(ChannelType.WhatsApp, wa.enabled, whatsAppStatus(wa)),
@@ -120,42 +141,61 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         return "Missing destination" to ChannelTone.INCOMPLETE
     }
 
+    @android.annotation.SuppressLint("UseKtx")
     fun setEnabled(type: ChannelType, enabled: Boolean) {
         val key = when (type) {
             ChannelType.WhatsApp -> WhatsAppConfig.KEY_ENABLED
             ChannelType.Telegram -> TelegramConfig.KEY_ENABLED
             ChannelType.Sms -> SmsConfig.KEY_ENABLED
         }
-        prefs.edit {
-            putBoolean(key, enabled)
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    FilterRuleMutationCoordinator.withLock {
+                        val before = PreferenceSnapshot.capture(prefs, setOf(key))
+                        if (!prefs.edit().putBoolean(key, enabled).commit()) {
+                            before.restore(prefs)
+                            error("Could not persist channel state")
+                        }
+                    }
+                }
+            }
+            refresh()
+            if (result.isFailure) {
+                reportProvisioningMessage("Could not save the channel state. Check device storage and try again.")
+            }
         }
-        refresh()
     }
 
-    fun saveWhatsApp(enabled: Boolean, phoneNumberId: String, recipient: String, newToken: String?) {
-        prefs.edit {
-            putBoolean(WhatsAppConfig.KEY_ENABLED, enabled)
-            putString(WhatsAppConfig.KEY_PHONE_NUMBER_ID, phoneNumberId.trim())
-            putString(WhatsAppConfig.KEY_RECIPIENT, recipient.trim())
-        }
-        // null means "the mask was left untouched" -> keep the stored token. A non-null
-        // value writes it; SecureStore.write removes the secret when the value is blank,
-        // so an emptied field clears the token.
-        if (newToken != null) {
-            SecureStore.write(getApplication(), SecureStore.KEY_WA_ACCESS_TOKEN, newToken.trim())
-        }
-        refresh()
+    fun saveWhatsApp(enabled: Boolean, phoneNumberId: String, recipient: String, newToken: String?, onComplete: (Result<String?>) -> Unit) {
+        saveChannel(channelUpdate(whatsApp = ProvisionedWhatsApp(enabled, phoneNumberId.trim(), newToken?.trim(), recipient.trim())), onComplete)
     }
 
-    fun saveTelegram(enabled: Boolean, chatId: String, newToken: String?) {
-        prefs.edit {
-            putBoolean(TelegramConfig.KEY_ENABLED, enabled)
-            putString(TelegramConfig.KEY_CHAT_ID, chatId.trim())
+    fun saveTelegram(enabled: Boolean, chatId: String, newToken: String?, onComplete: (Result<String?>) -> Unit) {
+        saveChannel(channelUpdate(telegram = ProvisionedTelegram(enabled, newToken?.trim(), chatId.trim())), onComplete)
+    }
+
+    private fun channelUpdate(whatsApp: ProvisionedWhatsApp? = null, telegram: ProvisionedTelegram? = null, sms: ProvisionedSms? = null): ProvisionedConfiguration = ProvisionedConfiguration(null, whatsApp, telegram, sms, null, null)
+
+    private fun saveChannel(configuration: ProvisionedConfiguration, onComplete: (Result<String?>) -> Unit) {
+        if (_isSaving.value) {
+            return
         }
-        if (newToken != null) {
-            SecureStore.write(getApplication(), SecureStore.KEY_TG_BOT_TOKEN, newToken.trim())
+        _isSaving.value = true
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        ProvisioningBundle.save(getApplication(), configuration)
+                        if (configuration.sms != null) smsDestinationLoopWarning() else null
+                    }
+                }
+                refresh()
+                onComplete(result)
+            } finally {
+                _isSaving.value = false
+            }
         }
-        refresh()
     }
 
     fun importProvisioningBundle(uri: Uri, passphrase: String) {
@@ -240,14 +280,8 @@ class ChannelsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /** Returns the loop-guard advisory shown after saving SMS settings, or null. */
-    fun saveSms(enabled: Boolean, destination: String): String? {
-        prefs.edit {
-            putBoolean(SmsConfig.KEY_ENABLED, enabled)
-            putString(SmsConfig.KEY_DESTINATION, destination.trim())
-        }
-        refresh()
-        return smsDestinationLoopWarning()
+    fun saveSms(enabled: Boolean, destination: String, onComplete: (Result<String?>) -> Unit) {
+        saveChannel(channelUpdate(sms = ProvisionedSms(enabled, destination.trim())), onComplete)
     }
 
     private fun smsDestinationLoopWarning(): String? {

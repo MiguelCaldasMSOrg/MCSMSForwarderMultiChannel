@@ -6,7 +6,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.telephony.SmsManager
+import androidx.core.content.ContextCompat
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -44,7 +46,7 @@ object SmsChannel {
         }
         var dispatched = false
         try {
-            val smsManager = app.getSystemService(SmsManager::class.java) ?: throw IllegalStateException("SmsManager unavailable")
+            val smsManager = defaultSmsManager(app) ?: throw IllegalStateException("SmsManager unavailable")
             val parts = smsManager.divideMessage(body)
             val sentIntents = buildSentIntents(app, parts.size, config.destination)
             smsManager.sendMultipartTextMessage(config.destination, null, parts, sentIntents, null)
@@ -58,6 +60,9 @@ object SmsChannel {
         }
         return dispatched
     }
+
+    @Suppress("DEPRECATION")
+    internal fun defaultSmsManager(context: Context): SmsManager? = if (Build.VERSION.SDK_INT >= 31) context.getSystemService(SmsManager::class.java) else SmsManager.getDefault()
 
     private fun buildSentIntents(app: Context, partCount: Int, destination: String): ArrayList<PendingIntent> {
         ensureRegistered(app)
@@ -77,7 +82,7 @@ object SmsChannel {
         if (registered) {
             return
         }
-        app.registerReceiver(ResultReceiver, IntentFilter(ACTION), Context.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(app, ResultReceiver, IntentFilter(ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
         registered = true
     }
 
